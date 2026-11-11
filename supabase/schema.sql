@@ -15,6 +15,7 @@ create table if not exists public.players (
   money integer not null default 0,
   units integer not null default 0,
   stab integer not null default 100,
+  rev integer not null default 0,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -36,9 +37,14 @@ create table if not exists public.grants (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references public.players(id) on delete cascade,
   amount integer not null,
+  applied boolean not null default false,
   created_by uuid default auth.uid(),
   created_at timestamptz not null default now()
 );
+
+-- Для баз, створених до серверної логіки гри.
+alter table public.players add column if not exists rev integer not null default 0;
+alter table public.grants add column if not exists applied boolean not null default false;
 
 alter table public.players enable row level security;
 alter table public.admins enable row level security;
@@ -68,10 +74,7 @@ drop policy if exists players_insert on public.players;
 drop policy if exists players_update on public.players;
 create policy players_select on public.players for select to authenticated
   using (id = (select auth.uid()) or public.is_admin());
-create policy players_insert on public.players for insert to authenticated
-  with check (id = (select auth.uid()));
-create policy players_update on public.players for update to authenticated
-  using (id = (select auth.uid())) with check (id = (select auth.uid()));
+-- Гравець лише читає свій рядок. Створює і змінює його серверна функція game (supabase/functions/game).
 
 drop policy if exists admins_select on public.admins;
 create policy admins_select on public.admins for select to authenticated
@@ -108,7 +111,7 @@ as $$
 $$;
 
 revoke all on public.players, public.admins, public.events, public.grants, public.leaderboard from anon, authenticated;
-grant select, insert, update on public.players to authenticated;
+grant select on public.players to authenticated;
 grant select on public.admins to authenticated;
 grant select on public.events to anon, authenticated;
 grant insert, delete on public.events to authenticated;
