@@ -1,5 +1,7 @@
 /* ===== Гравець, інтерфейс, малювання ===== */
 initCities();
+let tOff = 0;                                   // різниця між годинником сервера і браузера
+const NOW = () => Date.now() + tOff;
 const $ = id => document.getElementById(id);
 const cv = $('cv'), ctx = cv.getContext('2d'), stage = $('stage');
 const css = getComputedStyle(document.documentElement);
@@ -33,12 +35,11 @@ function resize() {
 new ResizeObserver(resize).observe(stage);
 
 /* ---------- стан гравця ---------- */
-let S = null, started = false, sessionStart = Date.now(), hiddenAt = 0;
+let S = null, started = false, sessionStart = NOW(), hiddenAt = 0;
 const done = new Set(), shots = [], fx = [], engaged = new Set();
 let sel = null, placing = null, mouse = null, live = [], hover = null;
 let isDirty = false;
 const dirty = () => { isDirty = true; };
-const newState = nick => ({ v: 1, nick, money: START_MONEY, score: 0, kills: { d: 0, c: 0, b: 0 }, missed: 0, shots: 0, hits: 0, units: [], cities: {}, dead: {}, uid: 1, created: Date.now(), saved: 0 });
 const cityHp = id => (S && S.cities[id] != null) ? S.cities[id] : 100;
 const cityById = Object.fromEntries(CITIES.map(c => [c.id, c]));
 
@@ -55,41 +56,58 @@ try { clockFmt = new Intl.DateTimeFormat('uk-UA', { timeZone: 'Europe/Kyiv', hou
 catch (e) { clockFmt = new Intl.DateTimeFormat('uk-UA', { timeZone: 'Europe/Kiev', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }); }
 const fmtDur = ms => { const s = Math.max(0, Math.floor(ms / 1000)), h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60); const p = n => String(n).padStart(2, '0'); return (h ? p(h) + ':' : '') + p(m) + ':' + p(s % 60); };
 
-/* ---------- бій ---------- */
+/* ---------- бій: влучання і кошти вирішує сервер ---------- */
+const fireQueue = [], fireT = new Map(), inFlight = new Map();
+let fireBusy = false;
+const WHY = {
+  gone: 'Ціль уже зникла', dead: 'Ціль уже збито', range: 'Ціль поза зоною ураження ваших комплексів', type: 'Комплекс у цій зоні не працює по таких цілях',
+  ammo: 'У комплексі в цій зоні закінчився боєзапас', reload: 'Комплекс перезаряджається', money: 'Недостатньо коштів', land: 'Комплекс можна поставити лише на території України, крім тимчасово окупованого Криму',
+  limit: 'Досягнуто межі кількості комплексів', full: 'Боєзапас уже повний', nounit: 'Комплекс не знайдено', norescue: 'Аварійний резерв зараз недоступний',
+  busy: 'Сервер зайнятий, спробуйте ще раз', auth: 'Сесія завершилась. Увійдіть знову.', net: 'Немає зв’язку із сервером', server: 'Помилка сервера, спробуйте ще раз'
+};
 function fireAt(L, now) {
   const t = L.t, T = TYPES[t.type];
   if (engaged.has(t.id)) return;
-  let best = null, bv = -1e9, why = 'Ціль поза зоною ураження ваших комплексів';
+  let ok = false, why = WHY.range;                       // швидка локальна перевірка, остаточну робить сервер
   for (const u of S.units) {
     const U = UNITS[u.t];
     if (Math.hypot(u.x - L.x, u.y - L.y) > U.r) continue;
     if (!U.p[t.type]) { why = U.name + ' не працює по цілях типу ' + T.name; continue; }
-    if (u.ammo <= 0) { why = 'У комплексі в цій зоні закінчився боєзапас'; continue; }
-    if ((u.cd || 0) > now) { why = 'Комплекс перезаряджається'; continue; }
-    const val = U.p[t.type] * T.reward - U.ammo;          // найвигідніший комплекс для цього пострілу
-    if (val > bv) { bv = val; best = u; }
+    if (u.ammo <= 0) { why = WHY.ammo; continue; }
+    if ((u.cd || 0) > now) { why = WHY.reload; continue; }
+    ok = true; break;
   }
-  if (!best) { toast(why); return; }
-  const U = UNITS[best.t];
-  best.ammo--; best.cd = now + U.reload; S.shots++;
-  const dur = clamp(Math.hypot(best.x - L.x, best.y - L.y) / (best.t === 'mvg' ? 60 : 90) * 1000, 250, 2200);
-  const p = posAt(t, now + dur);
-  shots.push({ ux: best.x, uy: best.y, t, t0: now, t1: now + dur, tx: p[0], ty: p[1], hit: Math.random() < U.p[t.type] });
-  engaged.add(t.id); dirty();
+  if (!ok) { toast(why); return; }
+  engaged.add(t.id); fireT.set(t.id, t); fireQueue.push(t.id); flushFire();
+}
+async function flushFire() {
+  if (fireBusy || !fireQueue.length) return;
+  fireBusy = true;
+  const ids = fireQueue.splice(0, 12);
+  const r = await api('fire', { targets: ids });
+  const now = NOW(), res = (r.results || []);
+  let said = false;
+  for (const id of ids) {
+    const x = res.find(q => q.id === id), t = fireT.get(id); fireT.delete(id);
+    const u = x && x.ok ? S.units.find(q => q.id === x.unit) : null;
+    if (!x || !x.ok || !u || !t) { engaged.delete(id); if (!said) { said = true; toast(WHY[(x && x.why) || r.why] || WHY.server); } continue; }
+    const p = posAt(t, now + x.dur);
+    if (x.hit) inFlight.set(id, TYPES[t.type].reward);    // ціль і кошти з’являться, коли перехоплювач долетить
+    shots.push({ ux: u.x, uy: u.y, t, t0: now, t1: now + x.dur, tx: p[0], ty: p[1], hit: x.hit });
+  }
+  fireBusy = false; refresh(); flushFire();
 }
 function resolveShot(s) {
-  engaged.delete(s.t.id);
+  engaged.delete(s.t.id); inFlight.delete(s.t.id);
   const T = TYPES[s.t.type];
-  if (s.hit && s.t1 < s.t.t1 && !S.dead[s.t.id]) {
-    S.dead[s.t.id] = Math.round(s.t.t1);
-    S.money += T.reward; S.score += T.pts; S.kills[s.t.type]++; S.hits++;
+  if (s.hit) {
     fx.push({ k: 'ring', x: s.tx, y: s.ty, t0: s.t1, dur: 600, c: COL.accent, r: 16 });
     fx.push({ k: 'text', x: s.tx, y: s.ty, t0: s.t1, dur: 1100, c: COL.accent, txt: '+' + T.reward });
     log('Збито: ' + T.full + ' → ' + cityById[s.t.city].name + '  +◈' + T.reward, 'hit');
   } else {
     fx.push({ k: 'text', x: s.tx, y: s.ty, t0: s.t1, dur: 900, c: COL.mute, txt: 'промах' });
   }
-  dirty();
+  refresh();
 }
 function impact(t, now) {
   const T = TYPES[t.type], c = cityById[t.city];
@@ -104,14 +122,14 @@ let candKey = '', candVer = -1, cand = [];
 function frame() {
   requestAnimationFrame(frame);
   if (!mapLayer) return;
-  const now = Date.now();
+  const now = NOW();
   const key = Math.floor(now / SLOT) + ':' + Math.floor(now / WIN);
   if (key !== candKey || adminVer !== candVer) { candKey = key; candVer = adminVer; cand = candidates(now).concat(adminTargets); if (done.size > 4000) done.clear(); }
   live = [];
   for (const t of cand) {
-    if (S && S.dead[t.id]) continue;
+    if (S && S.dead[t.id] && !inFlight.has(t.id)) continue;
     if (now >= t.t1) {
-      if (started && t.t1 > sessionStart && now - t.t1 < 30000 && !done.has(t.id)) { done.add(t.id); impact(t, now); }
+      if (started && t.t1 > sessionStart && now - t.t1 < 30000 && !done.has(t.id)) { done.add(t.id); if (!S.dead[t.id]) impact(t, now); }
       continue;
     }
     if (now < t.t0) continue;
@@ -226,14 +244,16 @@ cv.addEventListener('pointermove', e => {
 cv.addEventListener('pointerleave', () => { mouse = null; hover = null; tip.style.display = 'none'; });
 cv.addEventListener('pointerdown', e => {
   if (!started) return;
-  const m = mouse = toWorld(e), now = Date.now();
+  const m = mouse = toWorld(e), now = NOW();
   if (placing) {
     const U = UNITS[placing];
     if (!inUkraine(m.x, m.y)) { toast('Комплекс можна поставити лише на території України, крім тимчасово окупованого Криму'); return; }
     if (S.money < U.price) { toast('Недостатньо коштів'); setPlacing(null); return; }
-    S.money -= U.price;
-    const u = { id: S.uid++, t: placing, x: Math.round(m.x * 10) / 10, y: Math.round(m.y * 10) / 10, ammo: U.start };
-    S.units.push(u); sel = u; setPlacing(null); log('Розгорнуто: ' + U.name, 'inf'); dirty(); refresh(); save();
+    const type = placing; setPlacing(null);
+    api('place', { type, x: Math.round(m.x * 10) / 10, y: Math.round(m.y * 10) / 10 }).then(r => {
+      if (!r.ok) { toast(WHY[r.why] || WHY.server); return; }
+      sel = S.units.find(q => q.id === r.unit) || null; log('Розгорнуто: ' + U.name, 'inf'); refresh();
+    });
     return;
   }
   const L = nearestTarget(m, e.pointerType === 'touch' ? 24 : 15);
@@ -262,10 +282,16 @@ for (const k in UNITS) {
   b.onclick = () => { if (started) { sel = null; setPlacing(k); refresh(); } };
   shop.append(b); shopBtns[k] = b;
 }
-$('uBuy1').onclick = () => { if (!sel) return; const U = UNITS[sel.t]; if (sel.ammo < U.cap && S.money >= U.ammo) { S.money -= U.ammo; sel.ammo++; dirty(); refresh(); } };
-$('uFill').onclick = () => { if (!sel) return; const U = UNITS[sel.t]; const n = Math.min(U.cap - sel.ammo, Math.floor(S.money / U.ammo)); if (n > 0) { S.money -= n * U.ammo; sel.ammo += n; dirty(); refresh(); } };
-$('uSell').onclick = () => { if (!sel) return; const U = UNITS[sel.t]; S.money += Math.floor(U.price / 2); S.units.splice(S.units.indexOf(sel), 1); log('Продано: ' + U.name, 'inf'); sel = null; dirty(); refresh(); save(); };
-$('rescueBtn').onclick = () => { if (needRescue()) { S.money = Math.max(S.money, 150); log('Отримано аварійний резерв', 'inf'); dirty(); refresh(); } };
+const unitAct = async (action, extra, done) => {
+  if (!sel) return;
+  const r = await api(action, Object.assign({ unit: sel.id }, extra));
+  if (!r.ok) toast(WHY[r.why] || WHY.server); else if (done) done();
+  refresh();
+};
+$('uBuy1').onclick = () => unitAct('buy', { n: 1 });
+$('uFill').onclick = () => unitAct('buy', { n: 99 });
+$('uSell').onclick = () => { const name = sel && UNITS[sel.t].name; unitAct('sell', {}, () => { log('Продано: ' + name, 'inf'); sel = null; }); };
+$('rescueBtn').onclick = async () => { const r = await api('rescue'); if (r.ok) log('Отримано аварійний резерв', 'inf'); else toast(WHY[r.why] || WHY.server); refresh(); };
 function needRescue() {
   if (!started || shots.length) return false;
   if (S.units.some(u => u.ammo > 0)) return false;
@@ -291,7 +317,7 @@ function renderCities() {
   $('stab').style.width = st + '%'; $('stab').style.background = st > 60 ? COL.ok : st > 25 ? COL.threat : COL.crit; $('stabTxt').textContent = st + '%';
 }
 function refresh() {
-  const now = Date.now();
+  const now = NOW();
   $('clock').textContent = clockFmt.format(now);
   const n = { d: 0, c: 0, b: 0 }; for (const L of live) n[L.t.type]++;
   $('air').textContent = live.length + ' · БпЛА ' + n.d + ' · КР ' + n.c + ' · БР ' + n.b;
@@ -303,7 +329,8 @@ function refresh() {
     const soon = w.start - now < 10 * 60000; al.className = soon ? 'air' : ''; $('alertTxt').textContent = soon ? 'Загроза масованої атаки' : 'Фонова активність';
   }
   if (!S) return;
-  $('money').textContent = '◈' + S.money; $('score').textContent = S.score;
+  let pend = 0; for (const v of inFlight.values()) pend += v;
+  $('money').textContent = '◈' + Math.max(0, S.money - pend); $('score').textContent = S.score;
   $('kills').textContent = S.kills.d + S.kills.c + S.kills.b; $('missed').textContent = S.missed;
   $('acc').textContent = S.shots ? Math.round(S.hits / S.shots * 100) + '%' : '—';
   $('who').textContent = S.nick;
@@ -322,42 +349,50 @@ setInterval(refresh, 250);
 setInterval(() => {            // повільне відновлення міст, поки гравець у грі
   if (!started || document.hidden) return;
   let ch = false; for (const c of CITIES) { const hp = cityHp(c.id); if (hp < 100) { S.cities[c.id] = hp + 1; ch = true; } }
-  const now = Date.now(); for (const id in S.dead) if (S.dead[id] < now - 60000) delete S.dead[id];
   if (ch) { renderCities(); dirty(); }
 }, 30000);
 
-/* ---------- акаунт і збереження (Supabase) ---------- */
+/* ---------- акаунт: стан гравця веде сервер ---------- */
 const CFG = window.PX_CONFIG || {};
 const sb = (CFG.url && CFG.key && window.supabase) ? window.supabase.createClient(CFG.url, CFG.key) : null;
-let uid = null, cloud = false, saving = false;
-const lsKey = () => 'projectx.v1' + (uid ? '.' + uid : '');
-const loadLocal = () => { try { return JSON.parse(localStorage.getItem(lsKey())); } catch (e) { return null; } };
-const saveLocal = () => { try { localStorage.setItem(lsKey(), JSON.stringify(S)); } catch (e) { } };
-function publicStats() {
-  let sum = 0; for (const c of CITIES) sum += cityHp(c.id);
-  return { nick: S.nick, score: S.score, kills: S.kills.d + S.kills.c + S.kills.b, kd: S.kills.d, kc: S.kills.c, kb: S.kills.b,
-    missed: S.missed, shots: S.shots, hits: S.hits, money: S.money, units: S.units.length, stab: Math.round(sum / CITIES.length) };
-}
-async function save() {
-  if (!S || !started) return;
-  S.saved = Date.now(); saveLocal();
-  if (!cloud || saving) return;
-  saving = true;
+let uid = null, cloud = false, bestRtt = 1e9;
+/* запит до серверної функції гри; відповідь завжди містить актуальний стан */
+async function api(action, body) {
+  const t0 = Date.now();
+  let d;
   try {
-    const row = Object.assign(publicStats(), { state: S, updated_at: new Date().toISOString() });
-    const { error } = await sb.from('players').update(row).eq('id', uid);
-    if (error) throw error;
-  } catch (e) { isDirty = true; }
-  saving = false;
+    const { data, error } = await sb.functions.invoke('game', { body: Object.assign({ action }, body) });
+    if (error) { let why = 'net'; try { const j = await error.context.json(); why = j.why || 'server'; } catch (e) { } return { ok: false, why }; }
+    d = data || { ok: false, why: 'server' };
+  } catch (e) { return { ok: false, why: 'net' }; }
+  const t1 = Date.now(), rtt = t1 - t0;
+  if (d.now && rtt <= bestRtt + 50) { bestRtt = Math.min(bestRtt, rtt); tOff = d.now - (t0 + t1) / 2; }   // єдиний час світу для всіх
+  if (d.state) {
+    const keep = started && S ? { cities: S.cities, missed: Math.max(S.missed, d.state.missed || 0) } : null;
+    S = d.state; if (keep) Object.assign(S, keep);
+    if (sel) sel = S.units.find(q => q.id === sel.id) || null;
+  }
+  if (d.granted) { log('Нарахування від адміністратора: ◈' + d.granted, 'inf'); toast('Адміністратор нарахував вам ◈' + d.granted); }
+  return d;
 }
-setInterval(() => { if (isDirty) { isDirty = false; save(); } }, 20000);
+/* стан міст і пропущені цілі надсилаються раз на 20 секунд; заодно сервер застосовує нарахування */
+let reporting = false;
+async function save() {
+  if (!S || !started || !cloud || reporting) return;
+  reporting = true;
+  const r = await api('report', { cities: S.cities, missed: S.missed });
+  if (!r.ok) isDirty = true;
+  reporting = false; refresh();
+}
+let lastReport = 0;
+setInterval(() => { if (isDirty || NOW() - lastReport > 60000) { isDirty = false; lastReport = NOW(); save(); } }, 20000);
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden) { hiddenAt = Date.now(); if (isDirty) { isDirty = false; save(); } }
-  else if (Date.now() - hiddenAt > 5000) sessionStart = Date.now();   // влучання за час відсутності не рахуються
+  if (document.hidden) { hiddenAt = NOW(); if (isDirty) { isDirty = false; save(); } }
+  else if (NOW() - hiddenAt > 5000) sessionStart = NOW();   // влучання за час відсутності не рахуються
 });
 async function loadTop() {
   const list = $('topList'), note = $('topNote');
-  if (!sb) { note.textContent = 'Спільний рейтинг з’явиться після підключення бази.'; return; }
+  if (!sb) return;
   const { data, error } = await sb.from('leaderboard').select('id,nick,score,kills').order('score', { ascending: false }).limit(20);
   if (error) { note.textContent = 'Не вдалося завантажити рейтинг. Спробуйте відкрити вкладку ще раз.'; return; }
   list.textContent = '';
@@ -370,23 +405,10 @@ async function loadTop() {
   });
   note.textContent = data.length ? 'Рахунок: БпЛА 10, крилата 50, балістика 200.' : 'Поки що жодного результату. Перше збиття відкриє рейтинг.';
 }
-
-/* нарахування від адміністратора: кожне застосовується один раз */
-async function pollGrants() {
-  if (!cloud || !started) return;
-  const { data, error } = await sb.from('grants').select('id,amount').eq('user_id', uid);
-  if (error || !data) return;
-  let add = 0;
-  for (const g of data) { const a = Math.round(Number(g.amount)); if (!S.grants[g.id] && Number.isFinite(a) && a) { S.grants[g.id] = 1; add += a; } }
-  if (add) { S.money = Math.max(0, S.money + add); log('Нарахування від адміністратора: ◈' + add, 'inf'); toast('Адміністратор нарахував вам ◈' + add); refresh(); save(); }
-}
-setInterval(pollGrants, 30000);
-function start(st) {
-  S = st; S.kills = S.kills || { d: 0, c: 0, b: 0 }; S.units = S.units || []; S.cities = S.cities || {}; S.dead = S.dead || {};
-  S.grants = S.grants || {};
-  started = true; sessionStart = Date.now(); $('gate').classList.add('off');
-  renderCities(); refresh(); save(); loadTop(); pollGrants();
-  $('logout').hidden = !cloud;
+function start() {
+  started = true; sessionStart = NOW(); $('gate').classList.add('off');
+  renderCities(); refresh(); loadTop();
+  $('logout').hidden = false;
   log('Вхід: ' + S.nick, 'inf');
   if (!S.units.length) toast('Оберіть комплекс в Арсеналі та поставте його біля міста');
 }
@@ -475,23 +497,9 @@ let entering = false;
 async function enter(user) {
   if (entering || started) return; entering = true;
   uid = user.id; cloud = true;
-  try {
-    let { data: row, error } = await sb.from('players').select('nick,state').eq('id', uid).maybeSingle();
-    if (error) throw error;
-    if (!row) {
-      const nick = String(user.user_metadata && user.user_metadata.nick || '').trim().slice(0, 16) || 'Гравець';
-      const st = newState(nick);
-      const ins = await sb.from('players').insert({ id: uid, nick, state: st, money: st.money });
-      if (ins.error) throw ins.error;
-      row = { nick, state: st };
-    }
-    let st = row.state && row.state.v ? row.state : newState(row.nick);
-    const local = loadLocal();
-    if (local && local.v && (local.saved || 0) > (st.saved || 0)) st = local;
-    start(st); initAdmin();
-  } catch (e) {
-    cloud = false; uid = null; showAuth('login', authError(e));
-  }
+  const r = await api('init', {});
+  if (r.ok && S) { start(); initAdmin(); }
+  else { cloud = false; uid = null; showAuth('login', WHY[r.why] || WHY.server); }
   entering = false;
 }
 $('logout').onclick = async () => {
@@ -500,22 +508,8 @@ $('logout').onclick = async () => {
   try { await sb.auth.signOut(); } catch (e) { }
   location.reload();
 };
-function showLocalGate(st) {
-  gateBody.textContent = '';
-  const note = el('p', { className: 'note', textContent: 'Базу ще не підключено. Прогрес зберігається лише в цьому браузері.' });
-  const btn = el('button', { className: 'btn pri', type: 'button' });
-  if (st) {
-    btn.textContent = 'Продовжити'; btn.onclick = () => start(st);
-    gateBody.append(el('p', { textContent: 'З поверненням, ' + st.nick + '. На рахунку ◈' + st.money + ', комплексів: ' + (st.units || []).length + '.' }), btn, note);
-  } else {
-    const [l, inp] = field('nick', 'Позивний', 'text', { maxLength: 16, placeholder: 'Наприклад, Сокіл' });
-    btn.type = 'submit'; btn.textContent = 'Почати гру';
-    const f = el('form'); f.onsubmit = e => { e.preventDefault(); const n = inp.value.trim().slice(0, 16); if (n) start(newState(n)); };
-    f.append(l, inp, btn); gateBody.append(f, note);
-  }
-}
 async function initStore() {
-  if (!sb) { showLocalGate(loadLocal()); return; }
+  if (!sb) { gateBody.textContent = ''; gateBody.append(el('p', { textContent: 'Базу не підключено: перевірте файл js/config.js.' })); return; }
   pollEvents(); setInterval(pollEvents, 10000);
   sb.auth.onAuthStateChange(ev => { if (ev === 'PASSWORD_RECOVERY') setTimeout(() => showAuth('newpass'), 0); });
   try {
