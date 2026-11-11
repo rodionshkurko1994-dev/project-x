@@ -181,7 +181,7 @@ function normalize(st, now) {
   st.money = Math.max(0, n(st.money)); st.score = Math.max(0, n(st.score));
   const k = st.kills || {}; st.kills = { d: n(k.d), c: n(k.c), b: n(k.b) };
   st.missed = n(st.missed); st.shots = n(st.shots); st.hits = n(st.hits);
-  st.units = (Array.isArray(st.units) ? st.units : []).filter(u => u && UNITS[u.t]).map(u => ({ id: n(u.id), t: u.t, x: +u.x || 0, y: +u.y || 0, ammo: clamp(n(u.ammo), 0, UNITS[u.t].cap), cd: n(u.cd) }));
+  st.units = (Array.isArray(st.units) ? st.units : []).filter(u => u && UNITS[u.t]).map(u => ({ id: n(u.id), t: u.t, x: +u.x || 0, y: +u.y || 0, ammo: clamp(n(u.ammo), 0, UNITS[u.t].cap), cd: Math.min(n(u.cd), now + UNITS[u.t].reload) }));   // перезарядка не може тривати довше за свій час
   st.cities = st.cities && typeof st.cities === 'object' ? st.cities : {};
   st.dead = st.dead && typeof st.dead === 'object' ? st.dead : {};
   for (const id in st.dead) if (!(st.dead[id] > now - 60000)) delete st.dead[id];
