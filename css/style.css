@@ -123,7 +123,7 @@ th,td{padding:7px 10px;text-align:right;border-bottom:1px solid var(--line)}
 th{font:500 10.5px var(--f-body);color:var(--mute);text-transform:uppercase;letter-spacing:.06em;background:var(--raise);cursor:pointer;user-select:none}
 th[aria-sort]{color:var(--accent)}
 td{font-family:var(--f-mono);font-variant-numeric:tabular-nums}
-th:first-child,td:first-child,th:nth-child(2),td:nth-child(2){text-align:left}
+th:first-child,td:first-child,th:nth-child(2),td:nth-child(2),th:nth-child(3),td:nth-child(3){text-align:left}
 td:nth-child(2){font-family:var(--f-body);font-weight:600}
 tr:last-child td{border-bottom:0}
 
@@ -137,6 +137,9 @@ tr:last-child td{border-bottom:0}
 .gatebox label{display:block;font-size:12px;color:var(--mute);margin-bottom:5px}
 .gatebox input{width:100%;background:var(--bg);border:1px solid var(--line);border-radius:4px;padding:10px 12px;color:var(--ink);font:500 16px var(--f-body);margin-bottom:12px}
 .gatebox .btn{width:100%;padding:11px;font-size:14px}
+.gatebox .links{display:flex;justify-content:space-between;gap:12px;margin-top:12px;flex-wrap:wrap}
+.linkbtn{background:none;border:0;padding:2px 0;color:var(--own);font-size:13px;text-decoration:underline;text-underline-offset:3px}
+.gatebox .note:empty{display:none}
 
 @media (max-width:860px){
   body{overflow:auto;height:auto;min-height:100%}

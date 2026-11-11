@@ -28,7 +28,7 @@
       <div class="gatebox">
         <h1>PROJECT <b>X</b></h1>
         <p>Небо над Україною живе за єдиним розкладом для всіх гравців. Розставте комплекси, натискайте на цілі в зоні ураження і заробляйте кошти лише збиттями.</p>
-        <div id="gateBody"><p>Завантажую акаунт…</p></div>
+        <div id="gateBody"><p>Завантаження…</p></div>
       </div>
     </div>
   </div>
@@ -44,6 +44,7 @@
       <div class="bar"><i id="stab"></i></div>
       <div class="barlab"><span>Стійкість країни</span><span class="num" id="stabTxt">100%</span></div>
       <div id="rescue"><button class="btn pri wide" id="rescueBtn" type="button" style="width:100%">Отримати аварійний резерв ◈150</button><p class="note">Доступний, лише коли немає ні коштів, ні боєзапасу.</p></div>
+      <button class="btn" id="logout" type="button" hidden style="margin-top:12px;width:100%">Вийти з акаунта</button>
     </section>
     <section id="unit">
       <h2>Обраний комплекс</h2>
@@ -105,11 +106,13 @@
       <div id="aUsers" hidden>
         <div class="sum" id="aSum"></div>
         <div class="twrap"><table><thead><tr id="aHead"></tr></thead><tbody id="aRows"></tbody></table></div>
-        <p class="note" id="aUsersNote">У списку ті, чий прогрес зберігається на сервері. Натисніть на заголовок стовпця, щоб відсортувати.</p>
+        <p class="note" id="aUsersNote">Усі зареєстровані гравці. Натисніть на заголовок стовпця, щоб відсортувати.</p>
       </div>
     </div>
   </div>
 </main>
+<script src="js/vendor/supabase.js"></script>
+<script src="js/config.js"></script>
 <script src="js/data.js"></script>
 <script src="js/core.js"></script>
 <script src="js/ui.js"></script>

@@ -1,0 +1,119 @@
+-- Project X: схема бази Supabase. Можна запускати повторно.
+
+create table if not exists public.players (
+  id uuid primary key references auth.users(id) on delete cascade,
+  nick text not null check (char_length(nick) between 1 and 16),
+  state jsonb not null default '{}'::jsonb,
+  score integer not null default 0,
+  kills integer not null default 0,
+  kd integer not null default 0,
+  kc integer not null default 0,
+  kb integer not null default 0,
+  missed integer not null default 0,
+  shots integer not null default 0,
+  hits integer not null default 0,
+  money integer not null default 0,
+  units integer not null default 0,
+  stab integer not null default 100,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.admins (
+  user_id uuid primary key references auth.users(id) on delete cascade
+);
+
+create table if not exists public.events (
+  id uuid primary key default gen_random_uuid(),
+  kind text not null,
+  t0 bigint not null,
+  data jsonb not null default '{}'::jsonb,
+  created_by uuid default auth.uid(),
+  created_at timestamptz not null default now()
+);
+
+create table if not exists public.grants (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.players(id) on delete cascade,
+  amount integer not null,
+  created_by uuid default auth.uid(),
+  created_at timestamptz not null default now()
+);
+
+alter table public.players enable row level security;
+alter table public.admins enable row level security;
+alter table public.events enable row level security;
+alter table public.grants enable row level security;
+
+create or replace function public.is_admin() returns boolean
+language sql stable security definer set search_path = ''
+as $$ select exists (select 1 from public.admins where user_id = (select auth.uid())) $$;
+
+-- Перший зареєстрований гравець стає адміністратором.
+create or replace function public.first_player_is_admin() returns trigger
+language plpgsql security definer set search_path = ''
+as $$
+begin
+  if not exists (select 1 from public.admins) then
+    insert into public.admins (user_id) values (new.id);
+  end if;
+  return new;
+end $$;
+drop trigger if exists first_player_is_admin on public.players;
+create trigger first_player_is_admin after insert on public.players
+  for each row execute function public.first_player_is_admin();
+
+drop policy if exists players_select on public.players;
+drop policy if exists players_insert on public.players;
+drop policy if exists players_update on public.players;
+create policy players_select on public.players for select to authenticated
+  using (id = (select auth.uid()) or public.is_admin());
+create policy players_insert on public.players for insert to authenticated
+  with check (id = (select auth.uid()));
+create policy players_update on public.players for update to authenticated
+  using (id = (select auth.uid())) with check (id = (select auth.uid()));
+
+drop policy if exists admins_select on public.admins;
+create policy admins_select on public.admins for select to authenticated
+  using (user_id = (select auth.uid()));
+
+drop policy if exists events_select on public.events;
+drop policy if exists events_insert on public.events;
+drop policy if exists events_delete on public.events;
+create policy events_select on public.events for select to anon, authenticated using (true);
+create policy events_insert on public.events for insert to authenticated with check (public.is_admin());
+create policy events_delete on public.events for delete to authenticated using (public.is_admin());
+
+drop policy if exists grants_select on public.grants;
+drop policy if exists grants_insert on public.grants;
+create policy grants_select on public.grants for select to authenticated
+  using (user_id = (select auth.uid()) or public.is_admin());
+create policy grants_insert on public.grants for insert to authenticated with check (public.is_admin());
+
+-- Відкритий рейтинг: лише позивний, рахунок і кількість збитих.
+create or replace view public.leaderboard as
+  select id, nick, score, kills from public.players;
+
+-- Список гравців з поштою, лише для адміністратора.
+create or replace function public.admin_users()
+returns table (id uuid, email text, nick text, score integer, kills integer, kd integer, kc integer, kb integer,
+  missed integer, shots integer, hits integer, money integer, units integer, stab integer,
+  created_at timestamptz, updated_at timestamptz)
+language sql stable security definer set search_path = ''
+as $$
+  select p.id, u.email::text, p.nick, p.score, p.kills, p.kd, p.kc, p.kb, p.missed, p.shots, p.hits,
+         p.money, p.units, p.stab, p.created_at, p.updated_at
+  from public.players p join auth.users u on u.id = p.id
+  where public.is_admin()
+$$;
+
+revoke all on public.players, public.admins, public.events, public.grants, public.leaderboard from anon, authenticated;
+grant select, insert, update on public.players to authenticated;
+grant select on public.admins to authenticated;
+grant select on public.events to anon, authenticated;
+grant insert, delete on public.events to authenticated;
+grant select, insert on public.grants to authenticated;
+grant select on public.leaderboard to anon, authenticated;
+revoke execute on function public.admin_users() from public, anon;
+grant execute on function public.admin_users() to authenticated;
+revoke execute on function public.first_player_is_admin() from public, anon, authenticated;

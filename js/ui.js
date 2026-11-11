@@ -326,16 +326,17 @@ setInterval(() => {            // повільне відновлення міс
   if (ch) { renderCities(); dirty(); }
 }, 30000);
 
-/* ---------- акаунт і збереження ---------- */
-const LS = 'projectx.v1';
-let db = null, user = null, uid = null, stateRef = null, scoreRef = null, cloud = false, saving = false, lastScoreSent = -1;
-const loadLocal = () => { try { return JSON.parse(localStorage.getItem(LS)); } catch (e) { return null; } };
-const saveLocal = () => { try { localStorage.setItem(LS, JSON.stringify(S)); } catch (e) { } };
-const timeout = (p, ms) => Promise.race([p, new Promise((_, r) => setTimeout(() => r(new Error('timeout')), ms))]);
+/* ---------- акаунт і збереження (Supabase) ---------- */
+const CFG = window.PX_CONFIG || {};
+const sb = (CFG.url && CFG.key && window.supabase) ? window.supabase.createClient(CFG.url, CFG.key) : null;
+let uid = null, cloud = false, saving = false;
+const lsKey = () => 'projectx.v1' + (uid ? '.' + uid : '');
+const loadLocal = () => { try { return JSON.parse(localStorage.getItem(lsKey())); } catch (e) { return null; } };
+const saveLocal = () => { try { localStorage.setItem(lsKey(), JSON.stringify(S)); } catch (e) { } };
 function publicStats() {
   let sum = 0; for (const c of CITIES) sum += cityHp(c.id);
   return { nick: S.nick, score: S.score, kills: S.kills.d + S.kills.c + S.kills.b, kd: S.kills.d, kc: S.kills.c, kb: S.kills.b,
-    missed: S.missed, shots: S.shots, hits: S.hits, money: S.money, units: S.units.length, stab: Math.round(sum / CITIES.length), created: S.created };
+    missed: S.missed, shots: S.shots, hits: S.hits, money: S.money, units: S.units.length, stab: Math.round(sum / CITIES.length) };
 }
 async function save() {
   if (!S || !started) return;
@@ -343,13 +344,10 @@ async function save() {
   if (!cloud || saving) return;
   saving = true;
   try {
-    await stateRef.set(JSON.parse(JSON.stringify(S)));
-    const pub = publicStats(), sig = JSON.stringify(pub);      // відкрита статистика: рейтинг і список в адмінці
-    if (sig !== lastScoreSent) { pub.t = S.saved; await scoreRef.set(pub); lastScoreSent = sig; }
-  } catch (e) {
-    if (e && (e.code === 'invalid_argument' || e.code === 'revoked' || e.code === 'not_granted')) { cloud = false; toast('Збереження на сервері недоступне. Прогрес зберігається в цьому браузері.'); }
-    else isDirty = true;
-  }
+    const row = Object.assign(publicStats(), { state: S, updated_at: new Date().toISOString() });
+    const { error } = await sb.from('players').update(row).eq('id', uid);
+    if (error) throw error;
+  } catch (e) { isDirty = true; }
   saving = false;
 }
 setInterval(() => { if (isDirty) { isDirty = false; save(); } }, 20000);
@@ -359,93 +357,183 @@ document.addEventListener('visibilitychange', () => {
 });
 async function loadTop() {
   const list = $('topList'), note = $('topNote');
-  if (!db) { note.textContent = 'Спільний рейтинг з’явиться, коли гру відкрито через Claude з входом в акаунт.'; return; }
-  try {
-    const q = await timeout(db.collection('scores').orderBy('score', 'desc').limit(20).get(), 10000);
-    list.textContent = '';
-    q.docs.forEach((d, i) => {
-      const v = d.data() || {}, r = document.createElement('div'); r.className = 'r' + (d.id === uid ? ' me' : '');
-      const a = document.createElement('span'); a.textContent = i + 1;
-      const b = document.createElement('span'); b.textContent = String(v.nick || 'Без позивного').slice(0, 20);
-      const c = document.createElement('span'); c.textContent = Number(v.score) || 0;
-      r.append(a, b, c); list.append(r);
-    });
-    note.textContent = q.empty ? 'Поки що жодного результату. Перше збиття відкриє рейтинг.' : 'Рахунок: БпЛА 10, крилата 50, балістика 200.';
-  } catch (e) { note.textContent = 'Не вдалося завантажити рейтинг. Спробуйте відкрити вкладку ще раз.'; }
+  if (!sb) { note.textContent = 'Спільний рейтинг з’явиться після підключення бази.'; return; }
+  const { data, error } = await sb.from('leaderboard').select('id,nick,score,kills').order('score', { ascending: false }).limit(20);
+  if (error) { note.textContent = 'Не вдалося завантажити рейтинг. Спробуйте відкрити вкладку ще раз.'; return; }
+  list.textContent = '';
+  data.forEach((v, i) => {
+    const r = document.createElement('div'); r.className = 'r' + (v.id === uid ? ' me' : '');
+    const a = document.createElement('span'); a.textContent = i + 1;
+    const b = document.createElement('span'); b.textContent = String(v.nick || 'Без позивного').slice(0, 20);
+    const c = document.createElement('span'); c.textContent = Number(v.score) || 0;
+    r.append(a, b, c); list.append(r);
+  });
+  note.textContent = data.length ? 'Рахунок: БпЛА 10, крилата 50, балістика 200.' : 'Поки що жодного результату. Перше збиття відкриє рейтинг.';
 }
+
 /* нарахування від адміністратора: кожне застосовується один раз */
-let grantsOn = false;
-function watchGrants() {
-  if (grantsOn || !db || !uid) return; grantsOn = true;
-  db.doc('grants/' + uid).onSnapshot(snap => {
-    if (!snap.exists || !S) return;
-    const items = (snap.data() || {}).items || {}; let add = 0;
-    for (const id in items) { const a = Math.round(Number(items[id])); if (!S.grants[id] && Number.isFinite(a) && a) { S.grants[id] = 1; add += a; } }
-    if (add) { S.money = Math.max(0, S.money + add); log('Нарахування від адміністратора: ◈' + add, 'inf'); toast('Адміністратор нарахував вам ◈' + add); refresh(); save(); }
-  }, () => { grantsOn = false; });
+async function pollGrants() {
+  if (!cloud || !started) return;
+  const { data, error } = await sb.from('grants').select('id,amount').eq('user_id', uid);
+  if (error || !data) return;
+  let add = 0;
+  for (const g of data) { const a = Math.round(Number(g.amount)); if (!S.grants[g.id] && Number.isFinite(a) && a) { S.grants[g.id] = 1; add += a; } }
+  if (add) { S.money = Math.max(0, S.money + add); log('Нарахування від адміністратора: ◈' + add, 'inf'); toast('Адміністратор нарахував вам ◈' + add); refresh(); save(); }
 }
+setInterval(pollGrants, 30000);
 async function grantTo(id, amount, btn) {
   btn.disabled = true;
-  try {
-    const ref = db.doc('grants/' + id), snap = await ref.get();
-    const items = Object.assign({}, snap.exists ? (snap.data() || {}).items : null);
-    items['g' + Date.now().toString(36)] = amount;
-    await ref.set({ items });
-    toast('Нараховано ◈' + amount + '. Гравець отримає кошти одразу або при наступному вході.');
-  } catch (e) { toast('Не вдалося нарахувати кошти'); }
+  const { error } = await sb.from('grants').insert({ user_id: id, amount });
+  toast(error ? 'Не вдалося нарахувати кошти' : 'Нараховано ◈' + amount + '. Гравець отримає кошти протягом пів хвилини або при наступному вході.');
   btn.disabled = false;
+  if (!error && id === uid) pollGrants();
 }
+
 function start(st) {
   S = st; S.kills = S.kills || { d: 0, c: 0, b: 0 }; S.units = S.units || []; S.cities = S.cities || {}; S.dead = S.dead || {};
   S.grants = S.grants || {};
   started = true; sessionStart = Date.now(); $('gate').classList.add('off');
-  watchGrants();
-  renderCities(); refresh(); save(); loadTop();
+  renderCities(); refresh(); save(); loadTop(); pollGrants();
+  $('logout').hidden = !cloud;
   log('Вхід: ' + S.nick, 'inf');
   if (!S.units.length) toast('Оберіть комплекс в Арсеналі та поставте його біля міста');
 }
-function showGate(st) {
-  const box = $('gateBody'); box.textContent = '';
-  const note = document.createElement('p'); note.className = 'note';
-  note.textContent = cloud ? 'Акаунт прив’язано до вашого входу в Claude. Прогрес зберігається на сервері.' : 'Прогрес зберігається лише в цьому браузері.';
-  const btn = document.createElement('button'); btn.className = 'btn pri'; btn.type = 'button';
-  if (st) {
-    const p = document.createElement('p'); p.textContent = 'З поверненням, ' + st.nick + '. На рахунку ◈' + st.money + ', комплексів: ' + (st.units || []).length + '.';
-    btn.textContent = 'Продовжити'; btn.onclick = () => start(st); box.append(p, btn, note);
+
+/* ---------- вхід і реєстрація ---------- */
+const gateBody = $('gateBody');
+function el(tag, props) {
+  const e = Object.assign(document.createElement(tag), props || {});
+  for (let i = 2; i < arguments.length; i++) if (arguments[i]) e.append(arguments[i]);
+  return e;
+}
+function field(id, label, type, extra) {
+  const inp = el('input', Object.assign({ id, type, required: true }, extra || {}));
+  return [el('label', { htmlFor: id, textContent: label }), inp];
+}
+const authError = e => {
+  const m = String(e && e.message || e || '');
+  if (/invalid login credentials/i.test(m)) return 'Неправильна пошта або пароль.';
+  if (/email not confirmed/i.test(m)) return 'Пошту ще не підтверджено. Перейдіть за посиланням у листі.';
+  if (/rate limit|too many|security purposes/i.test(m)) return 'Забагато спроб. Зачекайте кілька хвилин і спробуйте ще раз.';
+  if (/already registered|already been registered/i.test(m)) return 'Ця адреса вже зареєстрована. Увійдіть або відновіть пароль.';
+  if (/password/i.test(m) && /least|short|weak/i.test(m)) return 'Пароль закороткий або заслабкий. Потрібно щонайменше 8 символів.';
+  if (/valid email|invalid.*email/i.test(m)) return 'Перевірте адресу електронної пошти.';
+  if (/failed to fetch|network/i.test(m)) return 'Немає зв’язку із сервером. Перевірте інтернет і спробуйте ще раз.';
+  return 'Не вдалося виконати дію: ' + m;
+};
+const redirectTo = location.origin + location.pathname;
+function showAuth(mode, info) {
+  $('gate').classList.remove('off'); gateBody.textContent = '';
+  const msg = el('p', { className: 'note', textContent: info || '' }); msg.setAttribute('role', 'status');
+  const btn = el('button', { className: 'btn pri', type: 'submit' });
+  const form = el('form');
+  const link = (text, to) => { const b = el('button', { type: 'button', className: 'linkbtn', textContent: text }); b.onclick = () => showAuth(to); return b; };
+  const links = el('div', { className: 'links' });
+  let run;
+  if (mode === 'signup') {
+    const [l0, nick] = field('nick', 'Позивний', 'text', { maxLength: 16, autocomplete: 'nickname', placeholder: 'Наприклад, Сокіл' });
+    const [l1, mail] = field('email', 'Електронна пошта', 'email', { autocomplete: 'email' });
+    const [l2, pass] = field('password', 'Пароль, щонайменше 8 символів', 'password', { minLength: 8, autocomplete: 'new-password' });
+    btn.textContent = 'Зареєструватися'; form.append(l0, nick, l1, mail, l2, pass, btn);
+    links.append(link('У мене вже є акаунт', 'login'));
+    run = async () => {
+      const n = nick.value.trim().slice(0, 16); if (!n) { nick.focus(); throw new Error('Вкажіть позивний.'); }
+      const { data, error } = await sb.auth.signUp({ email: mail.value.trim(), password: pass.value, options: { data: { nick: n }, emailRedirectTo: redirectTo } });
+      if (error) throw error;
+      if (data.user && data.user.identities && !data.user.identities.length) throw new Error('already registered');
+      if (data.session) return enter(data.session.user);
+      showAuth('login', 'Ми надіслали лист на ' + mail.value.trim() + '. Перейдіть за посиланням у ньому, щоб підтвердити адресу, і гра відкриється.');
+    };
+  } else if (mode === 'reset') {
+    const [l1, mail] = field('email', 'Електронна пошта', 'email', { autocomplete: 'email' });
+    btn.textContent = 'Надіслати посилання'; form.append(l1, mail, btn);
+    links.append(link('Повернутися до входу', 'login'));
+    run = async () => {
+      const { error } = await sb.auth.resetPasswordForEmail(mail.value.trim(), { redirectTo });
+      if (error) throw error;
+      showAuth('login', 'Якщо така адреса зареєстрована, на неї надійшов лист із посиланням для нового пароля.');
+    };
+  } else if (mode === 'newpass') {
+    const [l2, pass] = field('password', 'Новий пароль, щонайменше 8 символів', 'password', { minLength: 8, autocomplete: 'new-password' });
+    btn.textContent = 'Зберегти пароль'; form.append(l2, pass, btn);
+    run = async () => {
+      const { data, error } = await sb.auth.updateUser({ password: pass.value });
+      if (error) throw error;
+      if (started) { $('gate').classList.add('off'); toast('Пароль змінено'); } else return enter(data.user);
+    };
   } else {
-    const f = document.createElement('form');
-    const l = document.createElement('label'); l.htmlFor = 'nick'; l.textContent = 'Позивний';
-    const inp = document.createElement('input'); inp.id = 'nick'; inp.maxLength = 16; inp.autocomplete = 'nickname'; inp.placeholder = 'Наприклад, Сокіл';
-    btn.type = 'submit'; btn.textContent = 'Створити акаунт';
-    f.onsubmit = e => { e.preventDefault(); const n = inp.value.trim().slice(0, 16); if (!n) { inp.focus(); return; } start(newState(n)); };
-    f.append(l, inp, btn); box.append(f, note);
+    const [l1, mail] = field('email', 'Електронна пошта', 'email', { autocomplete: 'email' });
+    const [l2, pass] = field('password', 'Пароль', 'password', { autocomplete: 'current-password' });
+    btn.textContent = 'Увійти'; form.append(l1, mail, l2, pass, btn);
+    links.append(link('Створити акаунт', 'signup'), link('Забули пароль?', 'reset'));
+    run = async () => {
+      const { data, error } = await sb.auth.signInWithPassword({ email: mail.value.trim(), password: pass.value });
+      if (error) throw error;
+      return enter(data.user);
+    };
+  }
+  form.onsubmit = async e => {
+    e.preventDefault(); const label = btn.textContent; btn.disabled = true; btn.textContent = 'Зачекайте…'; msg.textContent = '';
+    try { await run(); } catch (err) { msg.textContent = /^[А-ЯІЇЄҐ]/.test(err.message || '') ? err.message : authError(err); }
+    btn.disabled = false; btn.textContent = label;
+  };
+  gateBody.append(form, links, msg);
+}
+let entering = false;
+async function enter(user) {
+  if (entering || started) return; entering = true;
+  uid = user.id; cloud = true;
+  try {
+    let { data: row, error } = await sb.from('players').select('nick,state').eq('id', uid).maybeSingle();
+    if (error) throw error;
+    if (!row) {
+      const nick = String(user.user_metadata && user.user_metadata.nick || '').trim().slice(0, 16) || 'Гравець';
+      const st = newState(nick);
+      const ins = await sb.from('players').insert({ id: uid, nick, state: st, money: st.money });
+      if (ins.error) throw ins.error;
+      row = { nick, state: st };
+    }
+    let st = row.state && row.state.v ? row.state : newState(row.nick);
+    const local = loadLocal();
+    if (local && local.v && (local.saved || 0) > (st.saved || 0)) st = local;
+    start(st); initAdmin();
+  } catch (e) {
+    cloud = false; uid = null; showAuth('login', authError(e));
+  }
+  entering = false;
+}
+$('logout').onclick = async () => {
+  $('logout').disabled = true;
+  isDirty = false; await save();
+  try { await sb.auth.signOut(); } catch (e) { }
+  location.reload();
+};
+function showLocalGate(st) {
+  gateBody.textContent = '';
+  const note = el('p', { className: 'note', textContent: 'Базу ще не підключено. Прогрес зберігається лише в цьому браузері.' });
+  const btn = el('button', { className: 'btn pri', type: 'button' });
+  if (st) {
+    btn.textContent = 'Продовжити'; btn.onclick = () => start(st);
+    gateBody.append(el('p', { textContent: 'З поверненням, ' + st.nick + '. На рахунку ◈' + st.money + ', комплексів: ' + (st.units || []).length + '.' }), btn, note);
+  } else {
+    const [l, inp] = field('nick', 'Позивний', 'text', { maxLength: 16, placeholder: 'Наприклад, Сокіл' });
+    btn.type = 'submit'; btn.textContent = 'Почати гру';
+    const f = el('form'); f.onsubmit = e => { e.preventDefault(); const n = inp.value.trim().slice(0, 16); if (n) start(newState(n)); };
+    f.append(l, inp, btn); gateBody.append(f, note);
   }
 }
 async function initStore() {
-  let remote = null;
+  if (!sb) { showLocalGate(loadLocal()); return; }
+  pollEvents(); setInterval(pollEvents, 10000);
+  sb.auth.onAuthStateChange(ev => { if (ev === 'PASSWORD_RECOVERY') setTimeout(() => showAuth('newpass'), 0); });
   try {
-    if (window.claude && window.claude.use) {
-      [db, user] = await timeout(Promise.all([window.claude.use('db'), window.claude.use('user')]), 8000);
-      uid = user ? await user.id() : null;
-      if (db && uid) {
-        stateRef = db.doc('data/users/' + uid + '/state'); scoreRef = db.doc('scores/' + uid);
-        db.collection('events').onSnapshot(onEvents, () => { });
-        initAdmin();
-        const snap = await timeout(stateRef.get(), 10000);
-        cloud = true;
-        if (snap.exists) remote = JSON.parse(JSON.stringify(snap.data()));
-      }
-    }
-  } catch (e) { cloud = false; }
-  const local = loadLocal();
-  let st = remote && remote.v ? remote : null;
-  if (local && local.v && (!st || (local.saved || 0) > (st.saved || 0))) st = local;
-  if (st) lastScoreSent = -1;
-  showGate(st);
+    const { data } = await sb.auth.getSession();
+    if (data && data.session) await enter(data.session.user); else showAuth('login');
+  } catch (e) { showAuth('login', authError(e)); }
 }
 
 /* ---------- події адміністратора: спільні для всіх гравців ---------- */
-let adminEvents = [], adminTargets = [], adminWaves = [], adminVer = 0, adminOpen = false;
+let adminEvents = [], adminTargets = [], adminWaves = [], adminVer = 0, adminOpen = false, eventsSig = '';
 /* Кожен тип загрози описано тут: як із запису в базі побудувати цілі. Нові загрози додаються новим ключем. */
 const EVENT_KINDS = {
   single: {
@@ -461,14 +549,22 @@ const EVENT_KINDS = {
     }
   }
 };
-function onEvents(snap) {
+async function pollEvents() {
+  if (!sb || document.hidden) return;
+  const { data, error } = await sb.from('events').select('id,kind,t0,data').order('t0', { ascending: false }).limit(200);
+  if (error || !data) return;
+  const sig = data.map(r => r.id).join(',');
+  if (sig === eventsSig) return;
+  eventsSig = sig; onEvents(data);
+}
+function onEvents(rows) {
   adminEvents = []; adminTargets = []; adminWaves = [];
-  for (const d of snap.docs) {
-    const e = d.data();
-    if (!e || !EVENT_KINDS[e.kind] || !Number.isFinite(e.t0)) continue;
-    let ts; try { ts = EVENT_KINDS[e.kind].build(d.id, e); } catch (err) { continue; }
+  for (const r of rows) {
+    const e = Object.assign({}, r.data, { kind: r.kind, t0: Number(r.t0) });
+    if (!EVENT_KINDS[e.kind] || !Number.isFinite(e.t0)) continue;
+    let ts; try { ts = EVENT_KINDS[e.kind].build(r.id, e); } catch (err) { continue; }
     const end = Math.max.apply(null, ts.map(t => t.t1));
-    adminEvents.push({ id: d.id, e, end, n: ts.length });
+    adminEvents.push({ id: r.id, e, end, n: ts.length });
     for (const t of ts) adminTargets.push(t);
     if (e.kind === 'wave') adminWaves.push({ start: e.t0, end: e.t0 + clamp(+e.dur || 0, 60000, 30 * 60000), n: ts.length });
   }
@@ -492,24 +588,25 @@ function renderEvents() {
   for (const ev of adminEvents) {
     const r = document.createElement('div'); r.className = 'ev';
     const a = document.createElement('span'), s = document.createElement('span'), b = document.createElement('button');
-    const K = EVENT_KINDS[ev.e.kind];
-    let txt = K.label(ev.e);
+    let txt = EVENT_KINDS[ev.e.kind].label(ev.e);
     if (ev.e.kind === 'single') { const c = cityById[ev.e.city]; txt += c ? ' → ' + c.name : ' → випадкове місто'; }
     else txt += ' · ' + ev.n + ' цілей';
     a.textContent = dtFmt.format(ev.e.t0) + '  ' + txt;
     const st = now < ev.e.t0 ? 'заплановано' : now < ev.end ? 'у повітрі' : 'завершено';
     s.className = 'st' + (st === 'у повітрі' ? ' live' : ''); s.textContent = st;
     b.className = 'btn'; b.type = 'button'; b.textContent = now < ev.end ? 'Скасувати' : 'Прибрати';
-    b.onclick = async () => { b.disabled = true; try { await db.doc('events/' + ev.id).delete(); } catch (e) { toast('Не вдалося видалити запис'); b.disabled = false; } };
+    b.onclick = async () => { b.disabled = true; const { error } = await sb.from('events').delete().eq('id', ev.id); if (error) { toast('Не вдалося видалити запис'); b.disabled = false; } else pollEvents(); };
     r.append(a, s, b); box.append(r);
   }
 }
-async function launch(data, okMsg) {
-  try { await db.collection('events').add(Object.assign({ seed: Math.floor(Math.random() * 2147483647), by: uid, at: Date.now() }, data)); toast(okMsg); }
-  catch (e) { toast(e && e.code === 'invalid_argument' ? 'Запуск відхилено: немає прав адміністратора' : 'Не вдалося запустити. Спробуйте ще раз.'); }
+async function launch(kind, t0, data, okMsg) {
+  data.seed = Math.floor(Math.random() * 2147483647);
+  const { error } = await sb.from('events').insert({ kind, t0, data });
+  toast(error ? 'Не вдалося запустити. Перевірте права адміністратора і спробуйте ще раз.' : okMsg);
+  if (!error) pollEvents();
 }
 const USER_COLS = [
-  ['#', null], ['Позивний', 'nick'], ['Рахунок', 'score'], ['Збито', 'kills'], ['БпЛА', 'kd'], ['КР', 'kc'], ['БР', 'kb'], ['Пропущено', 'missed'],
+  ['#', null], ['Позивний', 'nick'], ['Пошта', 'email'], ['Рахунок', 'score'], ['Збито', 'kills'], ['БпЛА', 'kd'], ['КР', 'kc'], ['БР', 'kb'], ['Пропущено', 'missed'],
   ['Влучність', 'acc'], ['Кошти', 'money'], ['Комплексів', 'units'], ['Стійкість', 'stab'], ['Реєстрація', 'created'], ['Остання активність', 't'], ['Нарахувати', null]
 ];
 let userRows = [], userSort = 'score', userDir = -1, grantAmount = 1000;
@@ -517,13 +614,13 @@ function renderUsers() {
   const head = $('aHead'), body = $('aRows'); head.textContent = ''; body.textContent = '';
   for (const [lab, key] of USER_COLS) {
     const th = document.createElement('th'); th.textContent = lab; th.scope = 'col';
-    if (key) { if (key === userSort) th.setAttribute('aria-sort', userDir < 0 ? 'descending' : 'ascending'); th.onclick = () => { if (userSort === key) userDir = -userDir; else { userSort = key; userDir = key === 'nick' ? 1 : -1; } renderUsers(); }; }
+    if (key) { if (key === userSort) th.setAttribute('aria-sort', userDir < 0 ? 'descending' : 'ascending'); th.onclick = () => { if (userSort === key) userDir = -userDir; else { userSort = key; userDir = (key === 'nick' || key === 'email') ? 1 : -1; } renderUsers(); }; }
     head.append(th);
   }
   const rows = userRows.slice().sort((a, b) => { const x = a[userSort], y = b[userSort]; return (typeof x === 'string' ? x.localeCompare(String(y), 'uk') : (x || 0) - (y || 0)) * userDir; });
   rows.forEach((r, i) => {
     const tr = document.createElement('tr');
-    const cells = [i + 1, r.nick, r.score, r.kills, r.kd, r.kc, r.kb, r.missed, r.shots ? Math.round(r.acc * 100) + '%' : '—', '◈' + r.money, r.units, r.stab + '%', r.created ? dtFmt.format(r.created) : '—', r.t ? dtFmt.format(r.t) : '—'];
+    const cells = [i + 1, r.nick, r.email, r.score, r.kills, r.kd, r.kc, r.kb, r.missed, r.shots ? Math.round(r.acc * 100) + '%' : '—', '◈' + r.money, r.units, r.stab + '%', r.created ? dtFmt.format(r.created) : '—', r.t ? dtFmt.format(r.t) : '—'];
     for (const c of cells) { const td = document.createElement('td'); td.textContent = c; tr.append(td); }
     const gtd = document.createElement('td'), gb = document.createElement('button'); gb.className = 'btn'; gb.type = 'button'; gb.style.padding = '3px 9px';
     const amt = clamp(Math.round(+grantAmount) || 0, -1000000, 1000000); gb.textContent = (amt < 0 ? '−◈' : '+◈') + Math.abs(amt); gb.disabled = !amt;
@@ -542,21 +639,20 @@ function renderUsers() {
 }
 async function loadUsers() {
   const note = $('aUsersNote');
-  try {
-    const q = await timeout(db.collection('scores').limit(1000).get(), 10000);
-    const num = v => Number(v) || 0;
-    userRows = q.docs.map(d => { const v = d.data() || {}; const shots = num(v.shots); return { id: d.id,
-      nick: String(v.nick || 'Без позивного').slice(0, 20), score: num(v.score), kills: num(v.kills), kd: num(v.kd), kc: num(v.kc), kb: num(v.kb), missed: num(v.missed),
-      shots, acc: shots ? num(v.hits) / shots : 0, money: num(v.money), units: num(v.units), stab: v.stab == null ? 100 : num(v.stab), created: num(v.created), t: num(v.t) }; });
-    renderUsers();
-    note.textContent = 'У списку ті, чий прогрес зберігається на сервері. Натисніть на заголовок стовпця, щоб відсортувати.';
-  } catch (e) { note.textContent = 'Не вдалося завантажити список користувачів. Натисніть «Оновити».'; renderUsers(); }
+  const { data, error } = await sb.rpc('admin_users');
+  if (error || !data) { note.textContent = 'Не вдалося завантажити список користувачів. Натисніть «Оновити».'; renderUsers(); return; }
+  const num = v => Number(v) || 0;
+  userRows = data.map(v => { const shots = num(v.shots); return { id: v.id,
+    nick: String(v.nick || 'Без позивного').slice(0, 20), email: String(v.email || ''), score: num(v.score), kills: num(v.kills), kd: num(v.kd), kc: num(v.kc), kb: num(v.kb), missed: num(v.missed),
+    shots, acc: shots ? num(v.hits) / shots : 0, money: num(v.money), units: num(v.units), stab: v.stab == null ? 100 : num(v.stab), created: Date.parse(v.created_at) || 0, t: Date.parse(v.updated_at) || 0 }; });
+  renderUsers();
+  note.textContent = 'Усі зареєстровані гравці. Натисніть на заголовок стовпця, щоб відсортувати.';
 }
 let adminReady = false;
 async function initAdmin() {
-  if (adminReady || !user) return; adminReady = true;
-  let can = false; try { can = !!(await user.canEdit()); } catch (e) { }
-  if (!can) return;
+  if (adminReady || !cloud) return; adminReady = true;
+  const { data } = await sb.from('admins').select('user_id').eq('user_id', uid).maybeSingle();
+  if (!data) return;
   const opt = (sel, v, t) => { const o = document.createElement('option'); o.value = v; o.textContent = t; sel.append(o); };
   for (const k in TYPES) opt($('aType'), k, TYPES[k].full);
   opt($('aEntry'), -1, 'Випадковий'); ENTRIES.forEach((e, i) => opt($('aEntry'), i, e.n));
@@ -564,21 +660,21 @@ async function initAdmin() {
   $('adminBtn').hidden = false;
   $('adminBtn').onclick = () => {
     adminOpen = !adminOpen; $('admin').hidden = !adminOpen;
-    if (adminOpen) { renderEvents(); const old = adminEvents.filter(ev => ev.end < Date.now() - 30 * 60000); (async () => { for (const ev of old) { try { await db.doc('events/' + ev.id).delete(); } catch (e) { } } })(); }
+    if (adminOpen) { renderEvents(); const old = adminEvents.filter(ev => ev.end < Date.now() - 30 * 60000).map(ev => ev.id); if (old.length) sb.from('events').delete().in('id', old).then(pollEvents); }
   };
   $('adminClose').onclick = () => { adminOpen = false; $('admin').hidden = true; };
   for (const b of document.querySelectorAll('[data-atab]')) b.onclick = () => {
     for (const o of document.querySelectorAll('[data-atab]')) { const on = o === b; o.setAttribute('aria-selected', on); $(o.dataset.atab).hidden = !on; }
     if (b.dataset.atab === 'aUsers') loadUsers();
   };
-  $('aLaunch').onclick = () => launch({ kind: 'single', type: $('aType').value, entry: +$('aEntry').value, city: $('aCity').value, t0: Date.now() + 2000 }, 'Ціль запущено');
+  $('aLaunch').onclick = () => launch('single', Date.now() + 2000, { type: $('aType').value, entry: +$('aEntry').value, city: $('aCity').value }, 'Ціль запущено');
   let armed = 0;
   $('aWave').onclick = () => {
     const b = $('aWave');
     if (Date.now() > armed) { armed = Date.now() + 4000; b.textContent = 'Натисніть ще раз, щоб підтвердити'; setTimeout(() => { if (Date.now() >= armed) b.textContent = 'Запустити масовану атаку'; }, 4100); return; }
     armed = 0; b.textContent = 'Запустити масовану атаку';
     const n = clamp(Math.round(+$('aN').value) || 100, 10, 300), dur = clamp(+$('aDur').value || 10, 1, 30) * 60000;
-    launch({ kind: 'wave', n, dur, t0: Date.now() + (+$('aDelay').value) * 60000 + 2000 }, 'Масовану атаку запущено: ' + n + ' цілей');
+    launch('wave', Date.now() + (+$('aDelay').value) * 60000 + 2000, { n, dur }, 'Масовану атаку запущено: ' + n + ' цілей');
   };
   setInterval(() => { if (adminOpen && !$('aThreats').hidden) renderEvents(); }, 5000);
 }
