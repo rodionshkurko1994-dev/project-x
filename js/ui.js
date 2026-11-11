@@ -295,7 +295,7 @@ function refresh() {
   $('clock').textContent = clockFmt.format(now);
   const n = { d: 0, c: 0, b: 0 }; for (const L of live) n[L.t.type]++;
   $('air').textContent = live.length + ' · БпЛА ' + n.d + ' · КР ' + n.c + ' · БР ' + n.b;
-  const w = curWave(now), al = $('alert');
+  const w = curWave(now, adminWaves), al = $('alert');
   if (w.active && now < w.end) { $('waveLab').textContent = 'Масована атака · пуски ще'; $('wave').textContent = fmtDur(w.end - now); al.className = 'mass'; $('alertTxt').textContent = 'Масована атака'; }
   else if (w.active) { $('waveLab').textContent = 'Масована атака'; $('wave').textContent = 'цілі долітають'; al.className = 'air'; $('alertTxt').textContent = 'Хвиля завершується'; }
   else {
@@ -381,14 +381,6 @@ async function pollGrants() {
   if (add) { S.money = Math.max(0, S.money + add); log('Нарахування від адміністратора: ◈' + add, 'inf'); toast('Адміністратор нарахував вам ◈' + add); refresh(); save(); }
 }
 setInterval(pollGrants, 30000);
-async function grantTo(id, amount, btn) {
-  btn.disabled = true;
-  const { error } = await sb.from('grants').insert({ user_id: id, amount });
-  toast(error ? 'Не вдалося нарахувати кошти' : 'Нараховано ◈' + amount + '. Гравець отримає кошти протягом пів хвилини або при наступному вході.');
-  btn.disabled = false;
-  if (!error && id === uid) pollGrants();
-}
-
 function start(st) {
   S = st; S.kills = S.kills || { d: 0, c: 0, b: 0 }; S.units = S.units || []; S.cities = S.cities || {}; S.dead = S.dead || {};
   S.grants = S.grants || {};
@@ -532,150 +524,21 @@ async function initStore() {
   } catch (e) { showAuth('login', authError(e)); }
 }
 
-/* ---------- події адміністратора: спільні для всіх гравців ---------- */
-let adminEvents = [], adminTargets = [], adminWaves = [], adminVer = 0, adminOpen = false, eventsSig = '';
-/* Кожен тип загрози описано тут: як із запису в базі побудувати цілі. Нові загрози додаються новим ключем. */
-const EVENT_KINDS = {
-  single: {
-    label: e => 'Одна ціль: ' + (TYPES[e.type] || TYPES.d).full,
-    build: (id, e) => [makeTarget(mulberry32(hash2(SEED, e.seed | 0)), 'a' + id + '_0', e.t0, false, { type: e.type, entry: e.entry, city: e.city })]
-  },
-  wave: {
-    label: e => 'Масована атака',
-    build: (id, e) => {
-      const rng = mulberry32(hash2(SEED, e.seed | 0)), n = clamp(e.n | 0, 1, 300), dur = clamp(+e.dur || 0, 60000, 30 * 60000), a = [];
-      for (let k = 0; k < n; k++) a.push(makeTarget(rng, 'a' + id + '_' + k, e.t0 + rng() * dur, true));
-      return a;
-    }
-  }
-};
+/* ---------- ручні запуски адміністратора: спільні для всіх гравців ---------- */
+let adminTargets = [], adminWaves = [], adminVer = 0, eventsSig = '';
 async function pollEvents() {
   if (!sb || document.hidden) return;
   const { data, error } = await sb.from('events').select('id,kind,t0,data').order('t0', { ascending: false }).limit(200);
   if (error || !data) return;
   const sig = data.map(r => r.id).join(',');
   if (sig === eventsSig) return;
-  eventsSig = sig; onEvents(data);
+  eventsSig = sig;
+  const b = buildEvents(data); adminTargets = b.targets; adminWaves = b.waves; adminVer++;
 }
-function onEvents(rows) {
-  adminEvents = []; adminTargets = []; adminWaves = [];
-  for (const r of rows) {
-    const e = Object.assign({}, r.data, { kind: r.kind, t0: Number(r.t0) });
-    if (!EVENT_KINDS[e.kind] || !Number.isFinite(e.t0)) continue;
-    let ts; try { ts = EVENT_KINDS[e.kind].build(r.id, e); } catch (err) { continue; }
-    const end = Math.max.apply(null, ts.map(t => t.t1));
-    adminEvents.push({ id: r.id, e, end, n: ts.length });
-    for (const t of ts) adminTargets.push(t);
-    if (e.kind === 'wave') adminWaves.push({ start: e.t0, end: e.t0 + clamp(+e.dur || 0, 60000, 30 * 60000), n: ts.length });
-  }
-  adminEvents.sort((a, b) => b.e.t0 - a.e.t0);
-  adminVer++; if (adminOpen) renderEvents();
-}
-function curWave(now) {
-  let w = waveState(now);
-  for (const a of adminWaves) {
-    if (now >= a.end + 8 * 60000) continue;
-    const A = { start: a.start, end: a.end, n: a.n, active: now >= a.start };
-    const wLaunching = w.active && now < w.end;
-    if (A.active ? !wLaunching : (!w.active && A.start < w.start)) w = A;
-  }
-  return w;
-}
-const dtFmt = new Intl.DateTimeFormat('uk-UA', { timeZone: clockFmt.resolvedOptions().timeZone, day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false });
-function renderEvents() {
-  const box = $('aEvents'), now = Date.now(); box.textContent = '';
-  if (!adminEvents.length) { const p = document.createElement('p'); p.className = 'note'; p.style.margin = '0'; p.textContent = 'Ручних запусків ще не було.'; box.append(p); return; }
-  for (const ev of adminEvents) {
-    const r = document.createElement('div'); r.className = 'ev';
-    const a = document.createElement('span'), s = document.createElement('span'), b = document.createElement('button');
-    let txt = EVENT_KINDS[ev.e.kind].label(ev.e);
-    if (ev.e.kind === 'single') { const c = cityById[ev.e.city]; txt += c ? ' → ' + c.name : ' → випадкове місто'; }
-    else txt += ' · ' + ev.n + ' цілей';
-    a.textContent = dtFmt.format(ev.e.t0) + '  ' + txt;
-    const st = now < ev.e.t0 ? 'заплановано' : now < ev.end ? 'у повітрі' : 'завершено';
-    s.className = 'st' + (st === 'у повітрі' ? ' live' : ''); s.textContent = st;
-    b.className = 'btn'; b.type = 'button'; b.textContent = now < ev.end ? 'Скасувати' : 'Прибрати';
-    b.onclick = async () => { b.disabled = true; const { error } = await sb.from('events').delete().eq('id', ev.id); if (error) { toast('Не вдалося видалити запис'); b.disabled = false; } else pollEvents(); };
-    r.append(a, s, b); box.append(r);
-  }
-}
-async function launch(kind, t0, data, okMsg) {
-  data.seed = Math.floor(Math.random() * 2147483647);
-  const { error } = await sb.from('events').insert({ kind, t0, data });
-  toast(error ? 'Не вдалося запустити. Перевірте права адміністратора і спробуйте ще раз.' : okMsg);
-  if (!error) pollEvents();
-}
-const USER_COLS = [
-  ['#', null], ['Позивний', 'nick'], ['Пошта', 'email'], ['Рахунок', 'score'], ['Збито', 'kills'], ['БпЛА', 'kd'], ['КР', 'kc'], ['БР', 'kb'], ['Пропущено', 'missed'],
-  ['Влучність', 'acc'], ['Кошти', 'money'], ['Комплексів', 'units'], ['Стійкість', 'stab'], ['Реєстрація', 'created'], ['Остання активність', 't'], ['Нарахувати', null]
-];
-let userRows = [], userSort = 'score', userDir = -1, grantAmount = 1000;
-function renderUsers() {
-  const head = $('aHead'), body = $('aRows'); head.textContent = ''; body.textContent = '';
-  for (const [lab, key] of USER_COLS) {
-    const th = document.createElement('th'); th.textContent = lab; th.scope = 'col';
-    if (key) { if (key === userSort) th.setAttribute('aria-sort', userDir < 0 ? 'descending' : 'ascending'); th.onclick = () => { if (userSort === key) userDir = -userDir; else { userSort = key; userDir = (key === 'nick' || key === 'email') ? 1 : -1; } renderUsers(); }; }
-    head.append(th);
-  }
-  const rows = userRows.slice().sort((a, b) => { const x = a[userSort], y = b[userSort]; return (typeof x === 'string' ? x.localeCompare(String(y), 'uk') : (x || 0) - (y || 0)) * userDir; });
-  rows.forEach((r, i) => {
-    const tr = document.createElement('tr');
-    const cells = [i + 1, r.nick, r.email, r.score, r.kills, r.kd, r.kc, r.kb, r.missed, r.shots ? Math.round(r.acc * 100) + '%' : '—', '◈' + r.money, r.units, r.stab + '%', r.created ? dtFmt.format(r.created) : '—', r.t ? dtFmt.format(r.t) : '—'];
-    for (const c of cells) { const td = document.createElement('td'); td.textContent = c; tr.append(td); }
-    const gtd = document.createElement('td'), gb = document.createElement('button'); gb.className = 'btn'; gb.type = 'button'; gb.style.padding = '3px 9px';
-    const amt = clamp(Math.round(+grantAmount) || 0, -1000000, 1000000); gb.textContent = (amt < 0 ? '−◈' : '+◈') + Math.abs(amt); gb.disabled = !amt;
-    gb.onclick = () => grantTo(r.id, amt, gb); gtd.append(gb); tr.append(gtd);
-    body.append(tr);
-  });
-  const now = Date.now(), sum = $('aSum'); sum.textContent = '';
-  const tile = (l, v) => { const d = document.createElement('div'), s = document.createElement('small'), n = document.createElement('span'); s.textContent = l; n.textContent = v; d.append(s, n); sum.append(d); };
-  tile('Зареєстровано', userRows.length);
-  tile('Активні за добу', userRows.filter(r => now - r.t < 86400000).length);
-  tile('Збито всього', userRows.reduce((s, r) => s + r.kills, 0));
-  tile('Пропущено всього', userRows.reduce((s, r) => s + r.missed, 0));
-  const gl = document.createElement('label'), gi = document.createElement('input'); gl.htmlFor = 'aGrant'; gl.className = 'grant'; gl.textContent = 'Сума нарахування ';
-  gi.id = 'aGrant'; gi.type = 'number'; gi.step = '100'; gi.value = grantAmount; gi.onchange = () => { grantAmount = +gi.value || 0; renderUsers(); }; gl.append(gi); sum.append(gl);
-  const b = document.createElement('button'); b.className = 'btn'; b.type = 'button'; b.textContent = 'Оновити'; b.onclick = loadUsers; sum.append(b);
-}
-async function loadUsers() {
-  const note = $('aUsersNote');
-  const { data, error } = await sb.rpc('admin_users');
-  if (error || !data) { note.textContent = 'Не вдалося завантажити список користувачів. Натисніть «Оновити».'; renderUsers(); return; }
-  const num = v => Number(v) || 0;
-  userRows = data.map(v => { const shots = num(v.shots); return { id: v.id,
-    nick: String(v.nick || 'Без позивного').slice(0, 20), email: String(v.email || ''), score: num(v.score), kills: num(v.kills), kd: num(v.kd), kc: num(v.kc), kb: num(v.kb), missed: num(v.missed),
-    shots, acc: shots ? num(v.hits) / shots : 0, money: num(v.money), units: num(v.units), stab: v.stab == null ? 100 : num(v.stab), created: Date.parse(v.created_at) || 0, t: Date.parse(v.updated_at) || 0 }; });
-  renderUsers();
-  note.textContent = 'Усі зареєстровані гравці. Натисніть на заголовок стовпця, щоб відсортувати.';
-}
-let adminReady = false;
+/* посилання на окрему сторінку адмінки бачить лише адміністратор */
 async function initAdmin() {
-  if (adminReady || !cloud) return; adminReady = true;
+  if (!cloud) return;
   const { data } = await sb.from('admins').select('user_id').eq('user_id', uid).maybeSingle();
-  if (!data) return;
-  const opt = (sel, v, t) => { const o = document.createElement('option'); o.value = v; o.textContent = t; sel.append(o); };
-  for (const k in TYPES) opt($('aType'), k, TYPES[k].full);
-  opt($('aEntry'), -1, 'Випадковий'); ENTRIES.forEach((e, i) => opt($('aEntry'), i, e.n));
-  opt($('aCity'), '', 'Випадкове'); CITIES.forEach(c => opt($('aCity'), c.id, c.name));
-  $('adminBtn').hidden = false;
-  $('adminBtn').onclick = () => {
-    adminOpen = !adminOpen; $('admin').hidden = !adminOpen;
-    if (adminOpen) { renderEvents(); const old = adminEvents.filter(ev => ev.end < Date.now() - 30 * 60000).map(ev => ev.id); if (old.length) sb.from('events').delete().in('id', old).then(pollEvents); }
-  };
-  $('adminClose').onclick = () => { adminOpen = false; $('admin').hidden = true; };
-  for (const b of document.querySelectorAll('[data-atab]')) b.onclick = () => {
-    for (const o of document.querySelectorAll('[data-atab]')) { const on = o === b; o.setAttribute('aria-selected', on); $(o.dataset.atab).hidden = !on; }
-    if (b.dataset.atab === 'aUsers') loadUsers();
-  };
-  $('aLaunch').onclick = () => launch('single', Date.now() + 2000, { type: $('aType').value, entry: +$('aEntry').value, city: $('aCity').value }, 'Ціль запущено');
-  let armed = 0;
-  $('aWave').onclick = () => {
-    const b = $('aWave');
-    if (Date.now() > armed) { armed = Date.now() + 4000; b.textContent = 'Натисніть ще раз, щоб підтвердити'; setTimeout(() => { if (Date.now() >= armed) b.textContent = 'Запустити масовану атаку'; }, 4100); return; }
-    armed = 0; b.textContent = 'Запустити масовану атаку';
-    const n = clamp(Math.round(+$('aN').value) || 100, 10, 300), dur = clamp(+$('aDur').value || 10, 1, 30) * 60000;
-    launch('wave', Date.now() + (+$('aDelay').value) * 60000 + 2000, { n, dur }, 'Масовану атаку запущено: ' + n + ' цілей');
-  };
-  setInterval(() => { if (adminOpen && !$('aThreats').hidden) renderEvents(); }, 5000);
+  if (data) $('adminBtn').hidden = false;
 }
 resize(); renderCities(); refresh(); requestAnimationFrame(frame); initStore();

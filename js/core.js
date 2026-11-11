@@ -122,3 +122,45 @@ function waveState(now) {
     if (now < i.end + 8 * 60000) return { start: i.start, end: i.end, n: i.n, active: now >= i.start };
   }
 }
+
+/* ===== Ручні запуски адміністратора: спільні для всіх гравців ===== */
+/* Кожен тип загрози описано тут: як із запису в базі побудувати цілі. Нові загрози додаються новим ключем. */
+const EVENT_KINDS = {
+  single: {
+    label: e => 'Одна ціль: ' + (TYPES[e.type] || TYPES.d).full,
+    build: (id, e) => [makeTarget(mulberry32(hash2(SEED, e.seed | 0)), 'a' + id + '_0', e.t0, false, { type: e.type, entry: e.entry, city: e.city })]
+  },
+  wave: {
+    label: e => 'Масована атака',
+    build: (id, e) => {
+      const rng = mulberry32(hash2(SEED, e.seed | 0)), n = clamp(e.n | 0, 1, 300), dur = clamp(+e.dur || 0, 60000, 30 * 60000), a = [];
+      for (let k = 0; k < n; k++) a.push(makeTarget(rng, 'a' + id + '_' + k, e.t0 + rng() * dur, true));
+      return a;
+    }
+  }
+};
+/* рядки таблиці events -> події, цілі та хвилі */
+function buildEvents(rows) {
+  const events = [], targets = [], waves = [];
+  for (const r of rows) {
+    const e = Object.assign({}, r.data, { kind: r.kind, t0: Number(r.t0) });
+    if (!EVENT_KINDS[e.kind] || !Number.isFinite(e.t0)) continue;
+    let ts; try { ts = EVENT_KINDS[e.kind].build(r.id, e); } catch (err) { continue; }
+    events.push({ id: r.id, e, end: Math.max.apply(null, ts.map(t => t.t1)), n: ts.length });
+    for (const t of ts) targets.push(t);
+    if (e.kind === 'wave') waves.push({ start: e.t0, end: e.t0 + clamp(+e.dur || 0, 60000, 30 * 60000), n: ts.length });
+  }
+  events.sort((a, b) => b.e.t0 - a.e.t0);
+  return { events, targets, waves };
+}
+/* поточна або наступна масована атака з урахуванням ручних */
+function curWave(now, adminWaves) {
+  let w = waveState(now);
+  for (const a of adminWaves || []) {
+    if (now >= a.end + 8 * 60000) continue;
+    const A = { start: a.start, end: a.end, n: a.n, active: now >= a.start };
+    const wLaunching = w.active && now < w.end;
+    if (A.active ? !wLaunching : (!w.active && A.start < w.start)) w = A;
+  }
+  return w;
+}

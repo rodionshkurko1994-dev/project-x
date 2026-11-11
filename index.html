@@ -14,7 +14,7 @@
   <div class="stat"><small>Час світу · Київ</small><span id="clock">--:--:--</span></div>
   <div class="stat"><small>У повітрі</small><span id="air">0</span></div>
   <div class="stat"><small id="waveLab">Наступна масована атака</small><span id="wave">--:--</span></div>
-  <button id="adminBtn" type="button" hidden>Адмінка</button>
+  <a id="adminBtn" href="admin.html" hidden>Адмінка</a>
   <div id="alert"><i></i><span id="alertTxt">Спокійно</span></div>
 </header>
 <main>
@@ -71,45 +71,6 @@
       <div id="logp" hidden><div id="log"></div></div>
     </section>
   </aside>
-  <div id="admin" hidden>
-    <div class="ahead"><h1>Адмінка</h1><button class="btn" id="adminClose" type="button">Закрити</button></div>
-    <div class="abody">
-      <div class="tabs" role="tablist">
-        <button role="tab" aria-selected="true" data-atab="aThreats" type="button">Загрози</button>
-        <button role="tab" aria-selected="false" data-atab="aUsers" type="button">Користувачі</button>
-      </div>
-      <div id="aThreats">
-        <div class="panel">
-          <h3>Одна додаткова ціль</h3>
-          <div class="fields">
-            <label for="aType">Тип цілі<select id="aType"></select></label>
-            <label for="aEntry">Напрямок заходу<select id="aEntry"></select></label>
-            <label for="aCity">Місто-ціль<select id="aCity"></select></label>
-          </div>
-          <button class="btn pri" id="aLaunch" type="button">Запустити ціль</button>
-        </div>
-        <div class="panel">
-          <h3>Масована атака</h3>
-          <div class="fields">
-            <label for="aN">Кількість цілей<input id="aN" type="number" min="10" max="300" step="10" value="100"></label>
-            <label for="aDur">Тривалість пусків, хв<input id="aDur" type="number" min="1" max="30" step="1" value="10"></label>
-            <label for="aDelay">Початок<select id="aDelay"><option value="0">Зараз</option><option value="1">Через 1 хв</option><option value="5">Через 5 хв</option><option value="15">Через 15 хв</option></select></label>
-          </div>
-          <button class="btn danger" id="aWave" type="button">Запустити масовану атаку</button>
-        </div>
-        <div class="panel">
-          <h3>Запущено вручну</h3>
-          <div id="aEvents"></div>
-          <p class="note">Ручні запуски бачать усі гравці: цілі з’являються в них за кілька секунд, щонайбільше за пів хвилини. Нові типи загроз додаватимуться в цей розділ.</p>
-        </div>
-      </div>
-      <div id="aUsers" hidden>
-        <div class="sum" id="aSum"></div>
-        <div class="twrap"><table><thead><tr id="aHead"></tr></thead><tbody id="aRows"></tbody></table></div>
-        <p class="note" id="aUsersNote">Усі зареєстровані гравці. Натисніть на заголовок стовпця, щоб відсортувати.</p>
-      </div>
-    </div>
-  </div>
 </main>
 <script src="js/vendor/supabase.js"></script>
 <script src="js/config.js"></script>

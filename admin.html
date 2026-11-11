@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Project X · Адмінка</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=Unbounded:wght@500;700;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body class="adm">
+<header>
+  <div class="brand">PROJECT <b>X</b><span>АДМІНКА</span></div>
+  <div class="stat"><small>Час світу · Київ</small><span id="clock">--:--:--</span></div>
+  <div class="stat"><small>У повітрі</small><span id="air">0</span></div>
+  <div class="stat"><small id="waveLab">Наступна масована атака</small><span id="wave">--:--</span></div>
+  <a class="back" href="./">До гри</a>
+  <button class="out" id="logout" type="button" hidden>Вийти</button>
+</header>
+<div class="agate" id="agate"><div class="gatebox"><h1>Адмінка</h1><div id="gateBody"><p>Завантаження…</p></div></div></div>
+<div class="awrap" id="app" hidden>
+  <h2>Загрози</h2>
+  <div class="agrid">
+    <div class="panel">
+      <h3>Одна додаткова ціль</h3>
+      <div class="fields">
+        <label for="aType">Тип цілі<select id="aType"></select></label>
+        <label for="aEntry">Напрямок заходу<select id="aEntry"></select></label>
+        <label for="aCity">Місто-ціль<select id="aCity"></select></label>
+      </div>
+      <button class="btn pri" id="aLaunch" type="button">Запустити ціль</button>
+    </div>
+    <div class="panel">
+      <h3>Масована атака</h3>
+      <div class="fields">
+        <label for="aN">Кількість цілей<input id="aN" type="number" min="10" max="300" step="10" value="100"></label>
+        <label for="aDur">Тривалість пусків, хв<input id="aDur" type="number" min="1" max="30" step="1" value="10"></label>
+        <label for="aDelay">Початок<select id="aDelay"><option value="0">Зараз</option><option value="1">Через 1 хв</option><option value="5">Через 5 хв</option><option value="15">Через 15 хв</option></select></label>
+      </div>
+      <button class="btn danger" id="aWave" type="button">Запустити масовану атаку</button>
+    </div>
+    <div class="panel">
+      <h3>Запущено вручну</h3>
+      <div id="aEvents"></div>
+      <p class="note">Ручні запуски бачать усі гравці, із затримкою до 10 секунд. Записи, старші за пів години, прибираються самі.</p>
+    </div>
+  </div>
+  <h2>Користувачі</h2>
+  <div class="sum" id="aSum"></div>
+  <div class="twrap"><table><thead><tr id="aHead"></tr></thead><tbody id="aRows"></tbody></table></div>
+  <p class="note" id="aUsersNote">Усі зареєстровані гравці. Натисніть на заголовок стовпця, щоб відсортувати.</p>
+</div>
+<div id="toast" role="status" style="position:fixed;top:auto;bottom:18px"></div>
+<script src="js/vendor/supabase.js"></script>
+<script src="js/config.js"></script>
+<script src="js/data.js"></script>
+<script src="js/core.js"></script>
+<script src="js/admin.js"></script>
+</body>
+</html>
