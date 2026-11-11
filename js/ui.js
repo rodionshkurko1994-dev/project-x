@@ -373,9 +373,33 @@ async function loadTop() {
     note.textContent = q.empty ? 'Поки що жодного результату. Перше збиття відкриє рейтинг.' : 'Рахунок: БпЛА 10, крилата 50, балістика 200.';
   } catch (e) { note.textContent = 'Не вдалося завантажити рейтинг. Спробуйте відкрити вкладку ще раз.'; }
 }
+/* нарахування від адміністратора: кожне застосовується один раз */
+let grantsOn = false;
+function watchGrants() {
+  if (grantsOn || !db || !uid) return; grantsOn = true;
+  db.doc('grants/' + uid).onSnapshot(snap => {
+    if (!snap.exists || !S) return;
+    const items = (snap.data() || {}).items || {}; let add = 0;
+    for (const id in items) { const a = Math.round(Number(items[id])); if (!S.grants[id] && Number.isFinite(a) && a) { S.grants[id] = 1; add += a; } }
+    if (add) { S.money = Math.max(0, S.money + add); log('Нарахування від адміністратора: ◈' + add, 'inf'); toast('Адміністратор нарахував вам ◈' + add); refresh(); save(); }
+  }, () => { grantsOn = false; });
+}
+async function grantTo(id, amount, btn) {
+  btn.disabled = true;
+  try {
+    const ref = db.doc('grants/' + id), snap = await ref.get();
+    const items = Object.assign({}, snap.exists ? (snap.data() || {}).items : null);
+    items['g' + Date.now().toString(36)] = amount;
+    await ref.set({ items });
+    toast('Нараховано ◈' + amount + '. Гравець отримає кошти одразу або при наступному вході.');
+  } catch (e) { toast('Не вдалося нарахувати кошти'); }
+  btn.disabled = false;
+}
 function start(st) {
   S = st; S.kills = S.kills || { d: 0, c: 0, b: 0 }; S.units = S.units || []; S.cities = S.cities || {}; S.dead = S.dead || {};
+  S.grants = S.grants || {};
   started = true; sessionStart = Date.now(); $('gate').classList.add('off');
+  watchGrants();
   renderCities(); refresh(); save(); loadTop();
   log('Вхід: ' + S.nick, 'inf');
   if (!S.units.length) toast('Оберіть комплекс в Арсеналі та поставте його біля міста');
@@ -486,9 +510,9 @@ async function launch(data, okMsg) {
 }
 const USER_COLS = [
   ['#', null], ['Позивний', 'nick'], ['Рахунок', 'score'], ['Збито', 'kills'], ['БпЛА', 'kd'], ['КР', 'kc'], ['БР', 'kb'], ['Пропущено', 'missed'],
-  ['Влучність', 'acc'], ['Кошти', 'money'], ['Комплексів', 'units'], ['Стійкість', 'stab'], ['Реєстрація', 'created'], ['Остання активність', 't']
+  ['Влучність', 'acc'], ['Кошти', 'money'], ['Комплексів', 'units'], ['Стійкість', 'stab'], ['Реєстрація', 'created'], ['Остання активність', 't'], ['Нарахувати', null]
 ];
-let userRows = [], userSort = 'score', userDir = -1;
+let userRows = [], userSort = 'score', userDir = -1, grantAmount = 1000;
 function renderUsers() {
   const head = $('aHead'), body = $('aRows'); head.textContent = ''; body.textContent = '';
   for (const [lab, key] of USER_COLS) {
@@ -501,6 +525,9 @@ function renderUsers() {
     const tr = document.createElement('tr');
     const cells = [i + 1, r.nick, r.score, r.kills, r.kd, r.kc, r.kb, r.missed, r.shots ? Math.round(r.acc * 100) + '%' : '—', '◈' + r.money, r.units, r.stab + '%', r.created ? dtFmt.format(r.created) : '—', r.t ? dtFmt.format(r.t) : '—'];
     for (const c of cells) { const td = document.createElement('td'); td.textContent = c; tr.append(td); }
+    const gtd = document.createElement('td'), gb = document.createElement('button'); gb.className = 'btn'; gb.type = 'button'; gb.style.padding = '3px 9px';
+    const amt = clamp(Math.round(+grantAmount) || 0, -1000000, 1000000); gb.textContent = (amt < 0 ? '−◈' : '+◈') + Math.abs(amt); gb.disabled = !amt;
+    gb.onclick = () => grantTo(r.id, amt, gb); gtd.append(gb); tr.append(gtd);
     body.append(tr);
   });
   const now = Date.now(), sum = $('aSum'); sum.textContent = '';
@@ -509,6 +536,8 @@ function renderUsers() {
   tile('Активні за добу', userRows.filter(r => now - r.t < 86400000).length);
   tile('Збито всього', userRows.reduce((s, r) => s + r.kills, 0));
   tile('Пропущено всього', userRows.reduce((s, r) => s + r.missed, 0));
+  const gl = document.createElement('label'), gi = document.createElement('input'); gl.htmlFor = 'aGrant'; gl.className = 'grant'; gl.textContent = 'Сума нарахування ';
+  gi.id = 'aGrant'; gi.type = 'number'; gi.step = '100'; gi.value = grantAmount; gi.onchange = () => { grantAmount = +gi.value || 0; renderUsers(); }; gl.append(gi); sum.append(gl);
   const b = document.createElement('button'); b.className = 'btn'; b.type = 'button'; b.textContent = 'Оновити'; b.onclick = loadUsers; sum.append(b);
 }
 async function loadUsers() {
@@ -516,7 +545,7 @@ async function loadUsers() {
   try {
     const q = await timeout(db.collection('scores').limit(1000).get(), 10000);
     const num = v => Number(v) || 0;
-    userRows = q.docs.map(d => { const v = d.data() || {}; const shots = num(v.shots); return {
+    userRows = q.docs.map(d => { const v = d.data() || {}; const shots = num(v.shots); return { id: d.id,
       nick: String(v.nick || 'Без позивного').slice(0, 20), score: num(v.score), kills: num(v.kills), kd: num(v.kd), kc: num(v.kc), kb: num(v.kb), missed: num(v.missed),
       shots, acc: shots ? num(v.hits) / shots : 0, money: num(v.money), units: num(v.units), stab: v.stab == null ? 100 : num(v.stab), created: num(v.created), t: num(v.t) }; });
     renderUsers();

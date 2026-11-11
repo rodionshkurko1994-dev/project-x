@@ -115,6 +115,8 @@ main{position:relative}
 .sum small{display:block;font-size:10px;color:var(--mute);text-transform:uppercase;letter-spacing:.06em}
 .sum span{font:500 16px var(--f-mono);font-variant-numeric:tabular-nums}
 .sum .btn{margin-left:auto}
+.sum .grant{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--mute)}
+.sum .grant input{width:96px;background:var(--bg);border:1px solid var(--line);border-radius:4px;padding:7px 8px;color:var(--ink);font:500 13px var(--f-mono)}
 .twrap{overflow-x:auto;border:1px solid var(--line);border-radius:6px}
 table{border-collapse:collapse;width:100%;font-size:12.5px;white-space:nowrap}
 th,td{padding:7px 10px;text-align:right;border-bottom:1px solid var(--line)}
