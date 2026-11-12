@@ -9,10 +9,10 @@ const TYPES = {
   b: { name: 'БР',   full: 'Балістична ракета', v: [14, 18],   dmg: 15, reward: 600, pts: 200 }
 };
 const UNITS = {
-  mvg:   { name: 'Мобільна вогнева група', short: 'МВГ', r: 34,  price: 150,  ammo: 4,   cap: 30, start: 15, reload: 700,  p: { d: .5,  c: .05, b: 0 } },
-  short: { name: 'ЗРК малої дальності',    short: 'МД',  r: 60,  price: 700,  ammo: 35,  cap: 8,  start: 4,  reload: 1800, p: { d: .85, c: .6,  b: 0 } },
-  mid:   { name: 'ЗРК середньої дальності',short: 'СД',  r: 110, price: 2400, ammo: 60,  cap: 6,  start: 3,  reload: 2600, p: { d: .9,  c: .8,  b: .2 } },
-  long:  { name: 'ЗРК великої дальності',  short: 'ВД',  r: 170, price: 7000, ammo: 380, cap: 4,  start: 2,  reload: 3600, p: { d: .95, c: .9,  b: .7 } }
+  mvg:   { name: 'Мобільна вогнева група', short: 'МВГ', r: 34,  price: 150,  ammo: 4,   cap: 30, start: 15, reload: 700,  p: { d: .75, c: .1,  b: 0 } },
+  short: { name: 'ЗРК малої дальності',    short: 'МД',  r: 60,  price: 700,  ammo: 35,  cap: 8,  start: 4,  reload: 1800, p: { d: .95, c: .8,  b: 0 } },
+  mid:   { name: 'ЗРК середньої дальності',short: 'СД',  r: 110, price: 2400, ammo: 60,  cap: 6,  start: 3,  reload: 2600, p: { d: .97, c: .9,  b: .4 } },
+  long:  { name: 'ЗРК великої дальності',  short: 'ВД',  r: 170, price: 7000, ammo: 380, cap: 4,  start: 2,  reload: 3600, p: { d: .98, c: .95, b: .85 } }
 };
 const START_MONEY = 800;
 const ENTRIES = [
@@ -46,7 +46,7 @@ function initCities() { CITY_W = CITIES.reduce((s, c) => s + c.w, 0); }
 
 function makeTarget(rng, id, t0, mass, force) {
   const r = rng();
-  let type = mass ? (r < .62 ? 'd' : r < .9 ? 'c' : 'b') : (r < .76 ? 'd' : r < .95 ? 'c' : 'b');
+  let type = mass ? (r < .62 ? 'd' : r < .9 ? 'c' : 'b') : (r < .84 ? 'd' : r < .97 ? 'c' : 'b');
   if (force && TYPES[force.type]) type = force.type;
   let k = rng() * ENTRY_W, e = ENTRIES[0];
   for (const c of ENTRIES) { if ((k -= c.w) < 0) { e = c; break; } }
@@ -78,7 +78,7 @@ function slotTargets(s) {
   const rng = mulberry32(hash2(SEED, s));
   const h = ((s * SLOT / 3600000) + 2) % 24;                 // приблизно київський час
   const night = h >= 22 || h < 5;
-  const n = night ? 30 + Math.floor(rng() * 12) : 17 + Math.floor(rng() * 10);
+  const n = night ? 52 + Math.floor(rng() * 18) : 34 + Math.floor(rng() * 14);
   a = [];
   for (let i = 0; i < n; i++) a.push(makeTarget(rng, 'b' + s + '_' + i, s * SLOT + rng() * SLOT, false));
   slotCache.set(s, a);
