@@ -5,6 +5,19 @@ const CFG = window.PX_CONFIG || {};
 const sb = (CFG.url && CFG.key && window.supabase) ? window.supabase.createClient(CFG.url, CFG.key) : null;
 const cityById = Object.fromEntries(CITIES.map(c => [c.id, c]));
 let uid = null, adminEvents = [], adminWaves = [], adminTargets = [];
+/* Час світу береться із сервера: якщо годинник комп'ютера поспішає чи відстає, запуски все одно стартують вчасно. */
+let tOff = 0, timeOk = false;
+const NOW = () => Date.now() + tOff;
+async function syncTime() {
+  const t0 = Date.now();
+  try {
+    let { data, error } = await sb.functions.invoke('game', { body: { action: 'time' } });
+    if (error && error.context) data = await error.context.json().catch(() => null);
+    const t1 = Date.now();
+    if (data && data.now) { tOff = data.now - (t0 + t1) / 2; timeOk = true; }
+  } catch (e) { }
+}
+
 
 let toastT = 0;
 function toast(msg) { const t = $('toast'); t.textContent = msg; t.classList.add('on'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('on'), 3200); }
@@ -16,7 +29,7 @@ const fmtDur = ms => { const s = Math.max(0, Math.floor(ms / 1000)), h = Math.fl
 
 /* ---------- стан світу у верхній смузі ---------- */
 function tick() {
-  const now = Date.now();
+  const now = NOW();
   $('clock').textContent = clockFmt.format(now);
   const n = { d: 0, c: 0, b: 0 }; let all = 0;
   for (const t of candidates(now).concat(adminTargets)) if (t.t0 <= now && now < t.t1) { n[t.type]++; all++; }
@@ -36,7 +49,7 @@ async function pollEvents() {
   renderEvents();
 }
 function renderEvents() {
-  const box = $('aEvents'), now = Date.now(); box.textContent = '';
+  const box = $('aEvents'), now = NOW(); box.textContent = '';
   if (!adminEvents.length) { const p = document.createElement('p'); p.className = 'note'; p.style.margin = '0 0 8px'; p.textContent = 'Ручних запусків зараз немає.'; box.append(p); return; }
   for (const ev of adminEvents) {
     const r = document.createElement('div'); r.className = 'ev';
@@ -88,7 +101,7 @@ function renderUsers() {
     gb.onclick = () => grantTo(r.id, amt, gb); gtd.append(gb); tr.append(gtd);
     body.append(tr);
   });
-  const now = Date.now(), sum = $('aSum'); sum.textContent = '';
+  const now = NOW(), sum = $('aSum'); sum.textContent = '';
   const tile = (l, v) => { const d = document.createElement('div'), s = document.createElement('small'), n = document.createElement('span'); s.textContent = l; n.textContent = v; d.append(s, n); sum.append(d); };
   tile('Зареєстровано', userRows.length);
   tile('Активні за добу', userRows.filter(r => now - r.t < 86400000).length);
@@ -144,17 +157,19 @@ async function open_(user) {
   for (const k in TYPES) opt($('aType'), k, TYPES[k].full);
   opt($('aEntry'), -1, 'Випадковий'); ENTRIES.forEach((e, i) => opt($('aEntry'), i, e.n));
   opt($('aCity'), '', 'Випадкове'); CITIES.forEach(c => opt($('aCity'), c.id, c.name));
-  $('aLaunch').onclick = () => launch('single', Date.now() + 2000, { type: $('aType').value, entry: +$('aEntry').value, city: $('aCity').value }, 'Ціль запущено');
+  $('aLaunch').onclick = () => launch('single', NOW() + 2000, { type: $('aType').value, entry: +$('aEntry').value, city: $('aCity').value }, 'Ціль запущено');
   let armed = 0;
   $('aWave').onclick = () => {
     const b = $('aWave');
-    if (Date.now() > armed) { armed = Date.now() + 4000; b.textContent = 'Натисніть ще раз, щоб підтвердити'; setTimeout(() => { if (Date.now() >= armed) b.textContent = 'Запустити масовану атаку'; }, 4100); return; }
+    if (NOW() > armed) { armed = NOW() + 4000; b.textContent = 'Натисніть ще раз, щоб підтвердити'; setTimeout(() => { if (NOW() >= armed) b.textContent = 'Запустити масовану атаку'; }, 4100); return; }
     armed = 0; b.textContent = 'Запустити масовану атаку';
     const n = clamp(Math.round(+$('aN').value) || 100, 10, 300), dur = clamp(+$('aDur').value || 10, 1, 30) * 60000;
-    launch('wave', Date.now() + (+$('aDelay').value) * 60000 + 2000, { n, dur }, 'Масовану атаку запущено: ' + n + ' цілей');
+    launch('wave', NOW() + (+$('aDelay').value) * 60000 + 2000, { n, dur }, 'Масовану атаку запущено: ' + n + ' цілей');
   };
+  await syncTime(); setInterval(syncTime, 300000);
+  if (!timeOk) toast('Не вдалося звірити час із сервером. Запуски можуть стартувати із затримкою.');
   await pollEvents();
-  const old = adminEvents.filter(ev => ev.end < Date.now() - 30 * 60000).map(ev => ev.id);
+  const old = adminEvents.filter(ev => ev.end < NOW() - 30 * 60000).map(ev => ev.id);
   if (old.length) { await sb.from('events').delete().in('id', old); pollEvents(); }
   setInterval(() => { if (!document.hidden) pollEvents(); }, 10000);
   loadUsers();

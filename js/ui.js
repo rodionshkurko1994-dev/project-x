@@ -117,6 +117,34 @@ function impact(t, now) {
   renderCities(); dirty();
 }
 
+/* ---------- звук: тихий сигнал, коли ціль входить у зону ураження ---------- */
+let audio = null, soundOn = true, lastBeep = 0;
+const heard = new Set();
+try { soundOn = localStorage.getItem('projectx.sound') !== '0'; } catch (e) { }
+function initAudio() {                       // браузер дозволяє звук лише після дії користувача
+  if (audio || !soundOn) return;
+  try { audio = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { }
+}
+addEventListener('pointerdown', initAudio);
+function beep() {
+  if (!soundOn || !audio || document.hidden) return;
+  const now = performance.now(); if (now - lastBeep < 1500) return; lastBeep = now;
+  if (audio.state === 'suspended') audio.resume();
+  const t = audio.currentTime;
+  [[784, 0], [1047, .11]].forEach(([f, at]) => {
+    const o = audio.createOscillator(), g = audio.createGain();
+    o.type = 'sine'; o.frequency.value = f;
+    g.gain.setValueAtTime(0, t + at); g.gain.linearRampToValueAtTime(.06, t + at + .015); g.gain.exponentialRampToValueAtTime(.0001, t + at + .22);
+    o.connect(g).connect(audio.destination); o.start(t + at); o.stop(t + at + .25);
+  });
+}
+function renderSound() { const b = $('sound'); b.textContent = 'Звук сповіщень: ' + (soundOn ? 'увімкнено' : 'вимкнено'); b.setAttribute('aria-pressed', soundOn); }
+$('sound').onclick = () => {
+  soundOn = !soundOn; try { localStorage.setItem('projectx.sound', soundOn ? '1' : '0'); } catch (e) { }
+  renderSound(); if (soundOn) { initAudio(); lastBeep = 0; beep(); }
+};
+renderSound();
+
 /* ---------- кадр ---------- */
 let candKey = '', candVer = -1, cand = [];
 function frame() {
@@ -139,6 +167,12 @@ function frame() {
   if (started) for (const L of live) for (const u of S.units) {
     const U = UNITS[u.t];
     if (u.ammo > 0 && U.p[L.t.type] && Math.hypot(u.x - L.x, u.y - L.y) <= U.r) { L.eng = true; break; }
+  }
+  if (started) {
+    let fresh = false;
+    for (const L of live) if (L.eng && !heard.has(L.t.id)) { heard.add(L.t.id); fresh = true; }
+    if (fresh) beep();
+    if (heard.size > 3000) heard.clear();
   }
   for (let i = shots.length - 1; i >= 0; i--) if (now >= shots[i].t1) { resolveShot(shots[i]); shots.splice(i, 1); }
 
