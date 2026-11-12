@@ -84,6 +84,13 @@ async function grantTo(id, amount, btn) {
   toast(error ? 'Не вдалося нарахувати кошти' : 'Нараховано ◈' + amount + '. Гравець отримає кошти протягом пів хвилини або при наступному вході.');
   btn.disabled = false;
 }
+async function rewardReferral(invitedId, inviterNick, btn) {
+  btn.disabled = true;
+  const { data, error } = await sb.rpc('reward_referral', { invited: invitedId });
+  if (error || !data) { toast('Не вдалося нарахувати бонус. Можливо, його вже нараховано.'); btn.disabled = false; }
+  else toast('Гравцю ' + inviterNick + ' нараховано ◈1000 за запрошення');
+  loadUsers();
+}
 function renderUsers() {
   const head = $('aHead'), body = $('aRows'); head.textContent = ''; body.textContent = '';
   for (const [lab, key] of USER_COLS) {
@@ -91,11 +98,21 @@ function renderUsers() {
     if (key) { if (key === userSort) th.setAttribute('aria-sort', userDir < 0 ? 'descending' : 'ascending'); th.onclick = () => { if (userSort === key) userDir = -userDir; else { userSort = key; userDir = (key === 'nick' || key === 'email') ? 1 : -1; } renderUsers(); }; }
     head.append(th);
   }
+  const byId = Object.fromEntries(userRows.map(q => [q.id, q]));
   const rows = userRows.slice().sort((a, b) => { const x = a[userSort], y = b[userSort]; return (typeof x === 'string' ? x.localeCompare(String(y), 'uk') : (x || 0) - (y || 0)) * userDir; });
   rows.forEach((r, i) => {
     const tr = document.createElement('tr');
     const cells = [i + 1, r.nick, r.email, r.score, r.kills, r.kd, r.kc, r.kb, r.missed, r.shots ? Math.round(r.acc * 100) + '%' : '—', '◈' + r.money, r.units, r.stab + '%', r.created ? dtFmt.format(r.created) : '—', r.t ? dtFmt.format(r.t) : '—'];
     for (const c of cells) { const td = document.createElement('td'); td.textContent = c; tr.append(td); }
+    const nickTd = tr.children[1];                       // примітки про запрошення біля позивного
+    if (r.referredBy && byId[r.referredBy]) { const d = document.createElement('div'); d.className = 'refnote'; d.textContent = 'прийшов за запрошенням: ' + byId[r.referredBy].nick; nickTd.append(d); }
+    for (const inv of userRows.filter(q => q.referredBy === r.id)) {
+      const d = document.createElement('div'); d.className = 'refnote' + (inv.refRewarded ? ' done' : '');
+      const s = document.createElement('span'); s.textContent = 'запросив: ' + inv.nick + (inv.created ? ' · ' + dtFmt.format(inv.created) : ''); d.append(s);
+      if (inv.refRewarded) { const ok = document.createElement('span'); ok.textContent = 'бонус нараховано'; d.append(ok); }
+      else { const b = document.createElement('button'); b.className = 'btn'; b.type = 'button'; b.textContent = 'Нарахувати ◈1000'; b.onclick = () => rewardReferral(inv.id, r.nick, b); d.append(b); }
+      nickTd.append(d);
+    }
     const gtd = document.createElement('td'), gb = document.createElement('button'); gb.className = 'btn'; gb.type = 'button'; gb.style.padding = '3px 9px';
     const amt = clamp(Math.round(+grantAmount) || 0, -1000000, 1000000); gb.textContent = (amt < 0 ? '−◈' : '+◈') + Math.abs(amt); gb.disabled = !amt;
     gb.onclick = () => grantTo(r.id, amt, gb); gtd.append(gb); tr.append(gtd);
@@ -107,6 +124,8 @@ function renderUsers() {
   tile('Активні за добу', userRows.filter(r => now - r.t < 86400000).length);
   tile('Збито всього', userRows.reduce((s, r) => s + r.kills, 0));
   tile('Пропущено всього', userRows.reduce((s, r) => s + r.missed, 0));
+  tile('Запрошень', userRows.filter(r => r.referredBy).length);
+  tile('Очікують бонусу', userRows.filter(r => r.referredBy && !r.refRewarded).length);
   const gl = document.createElement('label'), gi = document.createElement('input'); gl.htmlFor = 'aGrant'; gl.className = 'grant'; gl.textContent = 'Сума нарахування ';
   gi.id = 'aGrant'; gi.type = 'number'; gi.step = '100'; gi.value = grantAmount; gi.onchange = () => { grantAmount = +gi.value || 0; renderUsers(); }; gl.append(gi); sum.append(gl);
   const b = document.createElement('button'); b.className = 'btn'; b.type = 'button'; b.textContent = 'Оновити'; b.onclick = loadUsers; sum.append(b);
@@ -118,7 +137,7 @@ async function loadUsers() {
   const num = v => Number(v) || 0;
   userRows = data.map(v => { const shots = num(v.shots); return { id: v.id,
     nick: String(v.nick || 'Без позивного').slice(0, 20), email: String(v.email || ''), score: num(v.score), kills: num(v.kills), kd: num(v.kd), kc: num(v.kc), kb: num(v.kb), missed: num(v.missed),
-    shots, acc: shots ? num(v.hits) / shots : 0, money: num(v.money), units: num(v.units), stab: v.stab == null ? 100 : num(v.stab), created: Date.parse(v.created_at) || 0, t: Date.parse(v.updated_at) || 0 }; });
+    shots, acc: shots ? num(v.hits) / shots : 0, money: num(v.money), units: num(v.units), stab: v.stab == null ? 100 : num(v.stab), created: Date.parse(v.created_at) || 0, t: Date.parse(v.updated_at) || 0, referredBy: v.referred_by || null, refRewarded: !!v.ref_rewarded }; });
   renderUsers();
   note.textContent = 'Усі зареєстровані гравці. Натисніть на заголовок стовпця, щоб відсортувати.';
 }

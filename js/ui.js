@@ -139,6 +139,11 @@ function impact(t, now) {
   renderCities(); dirty();
 }
 
+$('refCopy').onclick = async () => {
+  const inp = $('refLink');
+  try { await navigator.clipboard.writeText(inp.value); toast('Посилання скопійовано'); }
+  catch (e) { inp.focus(); inp.select(); toast('Виділіть посилання і скопіюйте його вручну'); }
+};
 /* ---------- звук: тихий сигнал, коли ціль входить у зону ураження ---------- */
 let audio = null, soundOn = true, lastBeep = 0;
 const heard = new Set();
@@ -508,6 +513,8 @@ function start() {
   started = true; sessionStart = NOW(); $('gate').classList.add('off');
   renderCities(); refresh(); loadTop();
   $('logout').hidden = false;
+  $('refLink').value = location.origin + location.pathname + '?ref=' + uid.replace(/-/g, '').slice(0, 8);
+  $('invite').hidden = false;
   log('Вхід: ' + S.nick, 'inf');
   if (!S.units.length) toast('Оберіть комплекс в Арсеналі та поставте його біля міста');
 }
@@ -535,6 +542,13 @@ const authError = e => {
   return 'Не вдалося виконати дію: ' + m;
 };
 const redirectTo = location.origin + location.pathname;
+/* запрошення: код із посилання ?ref=… запам'ятовується до реєстрації */
+let refCode = '';
+try {
+  const q = (new URLSearchParams(location.search).get('ref') || '').toLowerCase();
+  if (/^[0-9a-f]{8}$/.test(q)) localStorage.setItem('projectx.ref', q);
+  refCode = localStorage.getItem('projectx.ref') || '';
+} catch (e) { }
 function showAuth(mode, info) {
   $('gate').classList.remove('off'); gateBody.textContent = '';
   const msg = el('p', { className: 'note', textContent: info || '' }); msg.setAttribute('role', 'status');
@@ -551,7 +565,7 @@ function showAuth(mode, info) {
     links.append(link('У мене вже є акаунт', 'login'));
     run = async () => {
       const n = nick.value.trim().slice(0, 16); if (!n) { nick.focus(); throw new Error('Вкажіть позивний.'); }
-      const { data, error } = await sb.auth.signUp({ email: mail.value.trim(), password: pass.value, options: { data: { nick: n }, emailRedirectTo: redirectTo } });
+      const { data, error } = await sb.auth.signUp({ email: mail.value.trim(), password: pass.value, options: { data: refCode ? { nick: n, ref: refCode } : { nick: n }, emailRedirectTo: redirectTo } });
       if (error) throw error;
       if (data.user && data.user.identities && !data.user.identities.length) throw new Error('already registered');
       if (data.session) return enter(data.session.user);
@@ -613,7 +627,7 @@ async function initStore() {
   sb.auth.onAuthStateChange(ev => { if (ev === 'PASSWORD_RECOVERY') setTimeout(() => showAuth('newpass'), 0); });
   try {
     const { data } = await sb.auth.getSession();
-    if (data && data.session) await enter(data.session.user); else showAuth('login');
+    if (data && data.session) await enter(data.session.user); else showAuth(refCode ? 'signup' : 'login', refCode ? 'Вас запросив інший гравець. Створіть акаунт, щоб почати.' : '');
   } catch (e) { showAuth('login', authError(e)); }
 }
 
