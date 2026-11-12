@@ -22,7 +22,7 @@ header{display:flex;align-items:stretch;gap:0;border-bottom:1px solid var(--line
 .stat{padding:8px 16px;border-right:1px solid var(--line);display:flex;flex-direction:column;justify-content:center;min-width:0}
 .stat small{font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--mute);white-space:nowrap}
 .stat span{font:500 15px/1.3 var(--f-mono);font-variant-numeric:tabular-nums;white-space:nowrap}
-#alert{margin-left:auto;display:flex;align-items:center;padding:0 18px;font:700 12px/1 var(--f-display);letter-spacing:.08em;text-transform:uppercase;gap:10px;white-space:nowrap}
+#alert{display:flex;align-items:center;padding:0 18px;font:700 12px/1 var(--f-display);letter-spacing:.08em;text-transform:uppercase;gap:10px;white-space:nowrap}
 #alert i{width:10px;height:10px;border-radius:50%;background:var(--ok);flex:none}
 #alert.air{color:var(--threat)} #alert.air i{background:var(--threat)}
 #alert.mass{color:#12060a;background:var(--crit)} #alert.mass i{background:#12060a;animation:blink 1s steps(2) infinite}
@@ -89,10 +89,12 @@ h2{font:700 10.5px/1 var(--f-display);letter-spacing:.12em;text-transform:upperc
 #rescue{display:none;margin-top:10px}
 
 /* адмінка */
-#adminBtn{background:none;border:0;border-left:1px solid var(--line);padding:0 18px;display:flex;align-items:center;text-decoration:none;font:700 11px/1 var(--f-display);letter-spacing:.1em;text-transform:uppercase;color:var(--accent);margin-left:auto}
+#tgLink{margin-left:auto;display:flex;align-items:center;gap:8px;padding:0 16px;border-left:1px solid var(--line);color:var(--own);font-size:13px;font-weight:500;text-decoration:none;white-space:nowrap}
+#tgLink:hover{background:var(--raise)}
+#tgLink:focus-visible,#adminBtn:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+#adminBtn{background:none;border:0;border-left:1px solid var(--line);padding:0 18px;display:flex;align-items:center;text-decoration:none;font:700 11px/1 var(--f-display);letter-spacing:.1em;text-transform:uppercase;color:var(--accent)}
 #adminBtn[hidden]{display:none}
 #adminBtn:hover{background:var(--raise)}
-#adminBtn:not([hidden])+#alert{margin-left:0}
 .panel{background:var(--raise);border-radius:6px;padding:14px;margin-bottom:14px}
 .panel h3{font:600 14px/1.2 var(--f-body);margin:0 0 10px}
 .fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:12px}
@@ -148,9 +150,10 @@ tr:last-child td{border-bottom:0}
   body{height:100dvh;overflow:hidden}
   header{flex-wrap:wrap}
   .brand{padding:9px 12px;font-size:14px;border-right:0;order:1}
-  #adminBtn{order:2;margin-left:auto;padding:0 12px;border-left:0}
-  #alert{order:3;margin-left:auto;padding:0 12px;font-size:10px;gap:7px}
-  #adminBtn:not([hidden])+#alert{margin-left:0}
+  #tgLink{order:2;padding:0 10px;border-left:0;min-width:44px;justify-content:center}
+  #tgLink span{display:none}
+  #adminBtn{order:2;padding:0 10px;border-left:0;font-size:10px}
+  #alert{order:3;padding:7px 12px;font-size:10px;gap:7px}
   header::after{content:'';order:4;flex-basis:100%;height:0}
   .stat{order:5;flex:1 1 0;padding:5px 10px;border-top:1px solid var(--line);min-width:0}
   .stat:last-of-type{border-right:0}
