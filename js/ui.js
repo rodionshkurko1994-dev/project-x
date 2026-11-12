@@ -12,17 +12,29 @@ const paths = MAP.map(m => ({ id: m.id, p: new Path2D(m.d) }));
 const hitCtx = document.createElement('canvas').getContext('2d');
 const inUkraine = (x, y) => paths.some(m => m.id !== 'crimea' && hitCtx.isPointInPath(m.p, x, y));
 
-let sc = 1, ox = 0, oy = 0, dpr = 1, mapLayer = null;
+/* камера: масштаб і зсув карти (щипок і перетягування на телефоні, коліщатко на комп'ютері) */
+let base = 1, sc = 1, ox = 0, oy = 0, dpr = 1, mapLayer = null, mapDirty = true, stW = 0, stH = 0;
+const cam = { z: 1, x: VIEW.x + VIEW.w / 2, y: VIEW.y + VIEW.h / 2 }, ZMAX = 6;
 const px = n => n / sc;
-function resize() {
-  const r = stage.getBoundingClientRect();
-  if (!r.width || !r.height) return;
-  dpr = Math.min(window.devicePixelRatio || 1, 2);
-  cv.width = Math.round(r.width * dpr); cv.height = Math.round(r.height * dpr);
-  sc = Math.min(r.width / VIEW.w, r.height / VIEW.h);
-  ox = (r.width - VIEW.w * sc) / 2 - VIEW.x * sc; oy = (r.height - VIEW.h * sc) / 2 - VIEW.y * sc;
-  mapLayer = document.createElement('canvas'); mapLayer.width = cv.width; mapLayer.height = cv.height;
+function applyCam() {
+  cam.z = clamp(cam.z, 1, ZMAX); sc = base * cam.z;
+  const hw = stW / 2 / sc, hh = stH / 2 / sc;
+  cam.x = hw * 2 >= VIEW.w ? VIEW.x + VIEW.w / 2 : clamp(cam.x, VIEW.x + hw, VIEW.x + VIEW.w - hw);
+  cam.y = hh * 2 >= VIEW.h ? VIEW.y + VIEW.h / 2 : clamp(cam.y, VIEW.y + hh, VIEW.y + VIEW.h - hh);
+  ox = stW / 2 - cam.x * sc; oy = stH / 2 - cam.y * sc;
+  mapDirty = true;
+}
+function zoomAt(sx, sy, f) {
+  const wx = (sx - ox) / sc, wy = (sy - oy) / sc;
+  cam.z = clamp(cam.z * f, 1, ZMAX);
+  const s2 = base * cam.z;
+  cam.x = wx - (sx - stW / 2) / s2; cam.y = wy - (sy - stH / 2) / s2;
+  applyCam();
+}
+function renderMap() {
+  mapDirty = false;
   const g = mapLayer.getContext('2d');
+  g.setTransform(1, 0, 0, 1, 0, 0);
   g.fillStyle = COL.bg; g.fillRect(0, 0, cv.width, cv.height);
   g.setTransform(dpr * sc, 0, 0, dpr * sc, dpr * ox, dpr * oy);
   g.strokeStyle = 'rgba(48,69,107,.28)'; g.lineWidth = px(1); g.beginPath();
@@ -31,6 +43,16 @@ function resize() {
   g.stroke();
   g.fillStyle = COL.land; g.strokeStyle = COL.line; g.lineWidth = px(1); g.lineJoin = 'round';
   for (const m of paths) { g.fill(m.p); g.stroke(m.p); }
+}
+function resize() {
+  const r = stage.getBoundingClientRect();
+  if (!r.width || !r.height) return;
+  stW = r.width; stH = r.height;
+  dpr = Math.min(window.devicePixelRatio || 1, 2);
+  cv.width = Math.round(stW * dpr); cv.height = Math.round(stH * dpr);
+  base = Math.min(stW / VIEW.w, stH / VIEW.h);
+  mapLayer = document.createElement('canvas'); mapLayer.width = cv.width; mapLayer.height = cv.height;
+  applyCam();
 }
 new ResizeObserver(resize).observe(stage);
 
@@ -176,6 +198,7 @@ function frame() {
   }
   for (let i = shots.length - 1; i >= 0; i--) if (now >= shots[i].t1) { resolveShot(shots[i]); shots.splice(i, 1); }
 
+  if (mapDirty) renderMap();
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.drawImage(mapLayer, 0, 0);
   ctx.setTransform(dpr * sc, 0, 0, dpr * sc, dpr * ox, dpr * oy);
@@ -198,7 +221,7 @@ function frame() {
     ctx.strokeStyle = hp > 60 ? COL.ok : hp > 25 ? COL.threat : COL.crit;
     ctx.beginPath(); ctx.arc(c.x, c.y, px(5.5), -1.5708, -1.5708 + 6.2832 * hp / 100); ctx.stroke();
     ctx.fillStyle = COL.ink; ctx.beginPath(); ctx.arc(c.x, c.y, px(2), 0, 6.2832); ctx.fill();
-    ctx.fillStyle = 'rgba(226,233,246,.72)'; ctx.fillText(c.name, c.x + px(9), c.y + px(.5));
+    if (c.w >= (sc < .5 ? 3 : sc < .8 ? 2 : 1)) { ctx.fillStyle = 'rgba(226,233,246,.72)'; ctx.fillText(c.name, c.x + px(9), c.y + px(.5)); }   // на малому масштабі лише великі міста
   }
   /* цілі */
   for (const L of live) {
@@ -263,7 +286,27 @@ function frame() {
 function toWorld(e) { const r = cv.getBoundingClientRect(); return { x: (e.clientX - r.left - ox) / sc, y: (e.clientY - r.top - oy) / sc, sx: e.clientX - r.left, sy: e.clientY - r.top }; }
 function nearestTarget(m, rad) { let b = null, bd = px(rad); for (const L of live) { const d = Math.hypot(L.x - m.x, L.y - m.y); if (d < bd) { bd = d; b = L; } } return b; }
 const tip = $('tip');
+const ptrs = new Map();
+let gesture = null;
+cv.addEventListener('pointerdown', e => {
+  try { cv.setPointerCapture(e.pointerId); } catch (err) { }
+  ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (ptrs.size === 1) gesture = { moved: false, pinch: false, sx: e.clientX, sy: e.clientY, cx: cam.x, cy: cam.y };
+  else if (ptrs.size === 2 && gesture) { const [a, b] = [...ptrs.values()]; gesture.pinch = true; gesture.d0 = Math.hypot(a.x - b.x, a.y - b.y) || 1; gesture.z0 = cam.z; }
+});
 cv.addEventListener('pointermove', e => {
+  const p = ptrs.get(e.pointerId);
+  if (p) { p.x = e.clientX; p.y = e.clientY; }
+  if (gesture && ptrs.size === 2) {                       // щипок: масштаб навколо точки між пальцями
+    const [a, b] = [...ptrs.values()], r = cv.getBoundingClientRect();
+    zoomAt((a.x + b.x) / 2 - r.left, (a.y + b.y) / 2 - r.top, gesture.z0 * Math.hypot(a.x - b.x, a.y - b.y) / gesture.d0 / cam.z);
+    return;
+  }
+  if (gesture && p && ptrs.size === 1 && !gesture.pinch) {  // перетягування: зсув карти
+    const dx = e.clientX - gesture.sx, dy = e.clientY - gesture.sy;
+    if (!gesture.moved && Math.hypot(dx, dy) > 8) gesture.moved = true;
+    if (gesture.moved) { cam.x = gesture.cx - dx / sc; cam.y = gesture.cy - dy / sc; applyCam(); tip.style.display = 'none'; return; }
+  }
   mouse = toWorld(e);
   const L = e.pointerType === 'touch' ? null : nearestTarget(mouse, 14);
   hover = L ? L.t.id : null;
@@ -275,10 +318,22 @@ cv.addEventListener('pointermove', e => {
     tip.style.left = Math.min(mouse.sx + 14, stage.clientWidth - tip.offsetWidth - 6) + 'px'; tip.style.top = Math.max(4, mouse.sy - 30) + 'px';
   } else tip.style.display = 'none';
 });
-cv.addEventListener('pointerleave', () => { mouse = null; hover = null; tip.style.display = 'none'; });
-cv.addEventListener('pointerdown', e => {
+cv.addEventListener('pointerleave', e => { if (e.pointerType !== 'touch') { mouse = null; hover = null; tip.style.display = 'none'; } });
+function endPointer(e) {
+  ptrs.delete(e.pointerId);
+  if (ptrs.size) return;
+  const g = gesture; gesture = null;
+  if (g && !g.moved && !g.pinch && e.type === 'pointerup') tap(e);
+  if (e.pointerType === 'touch') mouse = null;
+}
+cv.addEventListener('pointerup', endPointer);
+cv.addEventListener('pointercancel', endPointer);
+cv.addEventListener('wheel', e => { e.preventDefault(); const r = cv.getBoundingClientRect(); zoomAt(e.clientX - r.left, e.clientY - r.top, e.deltaY < 0 ? 1.2 : 1 / 1.2); }, { passive: false });
+$('zin').onclick = () => zoomAt(stW / 2, stH / 2, 1.5);
+$('zout').onclick = () => zoomAt(stW / 2, stH / 2, 1 / 1.5);
+function tap(e) {
   if (!started) return;
-  const m = mouse = toWorld(e), now = NOW();
+  const m = toWorld(e), now = NOW(), touch = e.pointerType === 'touch';
   if (placing) {
     const U = UNITS[placing];
     if (!inUkraine(m.x, m.y)) { toast('Комплекс можна поставити лише на території України, крім тимчасово окупованого Криму'); return; }
@@ -290,14 +345,22 @@ cv.addEventListener('pointerdown', e => {
     });
     return;
   }
-  const L = nearestTarget(m, e.pointerType === 'touch' ? 24 : 15);
+  const L = nearestTarget(m, touch ? 26 : 15);
   if (L) { fireAt(L, now); refresh(); return; }
-  let bu = null, bd = px(16);
+  let bu = null, bd = px(touch ? 24 : 16);
   for (const u of S.units) { const d = Math.hypot(u.x - m.x, u.y - m.y); if (d < bd) { bd = d; bu = u; } }
   sel = bu; refresh();
-});
+}
+/* телефон: панель відкривається знизу, картка обраного комплексу лежить поверх карти */
+const mq = matchMedia('(max-width:860px)'), unitEl = $('unit'), unitHome = unitEl.nextElementSibling;
+function layoutMode() { if (mq.matches) stage.append(unitEl); else unitHome.parentNode.insertBefore(unitEl, unitHome); document.body.classList.remove('sheet'); }
+mq.addEventListener('change', layoutMode); layoutMode();
+$('mOpen').onclick = () => document.body.classList.add('sheet');
+$('sheetClose').onclick = () => document.body.classList.remove('sheet');
+$('uClose').onclick = () => { sel = null; refresh(); };
 function setPlacing(k) {
   placing = k; $('placing').classList.toggle('on', !!k);
+  if (k) document.body.classList.remove('sheet');
   if (k) $('placingTxt').textContent = 'Оберіть місце на карті: ' + UNITS[k].name;
 }
 $('placingCancel').onclick = () => setPlacing(null);
@@ -348,23 +411,25 @@ function renderCities() {
   let sum = 0;
   for (const c of CITIES) { const hp = cityHp(c.id); sum += hp; const [i, v] = cityRows[c.id]; i.style.width = hp + '%'; i.style.background = hp > 60 ? COL.ok : hp > 25 ? COL.threat : COL.crit; v.textContent = hp; }
   const st = Math.round(sum / CITIES.length);
-  $('stab').style.width = st + '%'; $('stab').style.background = st > 60 ? COL.ok : st > 25 ? COL.threat : COL.crit; $('stabTxt').textContent = st + '%';
+  $('stab').style.width = st + '%'; $('stab').style.background = st > 60 ? COL.ok : st > 25 ? COL.threat : COL.crit; $('stabTxt').textContent = $('mStab').textContent = st + '%';
 }
 function refresh() {
   const now = NOW();
   $('clock').textContent = clockFmt.format(now);
   const n = { d: 0, c: 0, b: 0 }; for (const L of live) n[L.t.type]++;
-  $('air').textContent = live.length + ' · БпЛА ' + n.d + ' · КР ' + n.c + ' · БР ' + n.b;
+  const small = mq.matches;
+  $('airLab').textContent = small ? 'Цілі · БпЛА/КР/БР' : 'У повітрі';
+  $('air').textContent = small ? live.length + ' · ' + n.d + '/' + n.c + '/' + n.b : live.length + ' · БпЛА ' + n.d + ' · КР ' + n.c + ' · БР ' + n.b;
   const w = curWave(now, adminWaves), al = $('alert');
-  if (w.active && now < w.end) { $('waveLab').textContent = 'Масована атака · пуски ще'; $('wave').textContent = fmtDur(w.end - now); al.className = 'mass'; $('alertTxt').textContent = 'Масована атака'; }
+  if (w.active && now < w.end) { $('waveLab').textContent = small ? 'Атака · пуски ще' : 'Масована атака · пуски ще'; $('wave').textContent = fmtDur(w.end - now); al.className = 'mass'; $('alertTxt').textContent = 'Масована атака'; }
   else if (w.active) { $('waveLab').textContent = 'Масована атака'; $('wave').textContent = 'цілі долітають'; al.className = 'air'; $('alertTxt').textContent = 'Хвиля завершується'; }
   else {
-    $('waveLab').textContent = 'Наступна масована атака'; $('wave').textContent = 'через ' + fmtDur(w.start - now);
+    $('waveLab').textContent = small ? 'Масована атака' : 'Наступна масована атака'; $('wave').textContent = 'через ' + fmtDur(w.start - now);
     const soon = w.start - now < 10 * 60000; al.className = soon ? 'air' : ''; $('alertTxt').textContent = soon ? 'Загроза масованої атаки' : 'Фонова активність';
   }
   if (!S) return;
   let pend = 0; for (const v of inFlight.values()) pend += v;
-  $('money').textContent = '◈' + Math.max(0, S.money - pend); $('score').textContent = S.score;
+  $('money').textContent = $('mMoney').textContent = '◈' + Math.max(0, S.money - pend); $('score').textContent = S.score;
   $('kills').textContent = S.kills.d + S.kills.c + S.kills.b; $('missed').textContent = S.missed;
   $('acc').textContent = S.shots ? Math.round(S.hits / S.shots * 100) + '%' : '—';
   $('who').textContent = S.nick;

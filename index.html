@@ -12,7 +12,7 @@
 <header>
   <div class="brand">PROJECT <b>X</b></div>
   <div class="stat"><small>Час світу · Київ</small><span id="clock">--:--:--</span></div>
-  <div class="stat"><small>У повітрі</small><span id="air">0</span></div>
+  <div class="stat"><small id="airLab">У повітрі</small><span id="air">0</span></div>
   <div class="stat"><small id="waveLab">Наступна масована атака</small><span id="wave">--:--</span></div>
   <a id="adminBtn" href="admin.html" hidden>Адмінка</a>
   <div id="alert"><i></i><span id="alertTxt">Спокійно</span></div>
@@ -22,6 +22,7 @@
     <canvas id="cv" aria-label="Карта України з повітряними цілями"></canvas>
     <div id="placing"><span id="placingTxt"></span><button id="placingCancel" type="button">Скасувати</button></div>
     <div id="legend"><span><b style="color:var(--threat)">▲</b> БпЛА</span><span><b style="color:#ff6a4d">◆</b> крилата ракета</span><span><b style="color:var(--crit)">●</b> балістика</span><span><b style="color:var(--own)">◎</b> ваш комплекс і зона ураження</span></div>
+    <div id="zoom"><button id="zin" type="button" aria-label="Наблизити карту">+</button><button id="zout" type="button" aria-label="Віддалити карту">−</button></div>
     <div id="tip"></div>
     <div id="toast" role="status"></div>
     <div id="gate">
@@ -32,7 +33,9 @@
       </div>
     </div>
   </div>
+  <div id="mbar"><div><small>Кошти</small><span id="mMoney" class="num">◈0</span></div><div><small>Стійкість</small><span id="mStab" class="num">100%</span></div><button class="btn pri" id="mOpen" type="button">Арсенал і статус</button></div>
   <aside>
+    <button class="btn" id="sheetClose" type="button">Закрити панель</button>
     <section>
       <div class="wallet"><div><h2>Кошти</h2><div class="big"><span id="money">0</span></div></div><div class="who" id="who"></div></div>
       <div class="kpis">
@@ -49,7 +52,7 @@
     </section>
     <section id="unit">
       <h2>Обраний комплекс</h2>
-      <div class="row"><b id="uName"></b><span class="ammo num" id="uAmmo"></span></div>
+      <div class="row"><b id="uName"></b><span class="ammo num" id="uAmmo"></span><button class="btn" id="uClose" type="button" aria-label="Зняти вибір комплексу">×</button></div>
       <div class="btns">
         <button class="btn" id="uBuy1" type="button"></button>
         <button class="btn" id="uFill" type="button"></button>
